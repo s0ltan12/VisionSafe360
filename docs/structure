@@ -1,0 +1,137 @@
+VisionSafe360/
+├── edge_ai/
+│   ├── src/
+│   │   ├── main.py
+│   │   ├── __init__.py
+│   │   ├── config/
+│   │   │   ├── __init__.py
+│   │   │   └── settings.py
+│   │   ├── streaming/
+│   │   │   ├── __init__.py
+│   │   │   └── stream_handler.py            ← StreamHandler
+│   │   ├── inference/
+│   │   │   ├── __init__.py
+│   │   │   └── inference_engine.py          ← InferenceEngine
+│   │   ├── analysis/
+│   │   │   ├── __init__.py
+│   │   │   ├── hazard_analyzer.py           ← HazardAnalyzer
+│   │   │   └── posture_analyzer.py          ← PostureAnalyzer
+│   │   ├── privacy/
+│   │   │   ├── __init__.py
+│   │   │   └── face_blurrer.py              ← FaceBlurrer
+│   │   ├── alerts/
+│   │   │   ├── __init__.py
+│   │   │   ├── alert_manager.py             ← AlertManager
+│   │   │   ├── notification_service.py      ← NotificationService (interface)
+│   │   │   ├── fcm_service.py               ← FCMService
+│   │   │   └── siren_controller.py          ← SirenController
+│   │   ├── integration/
+│   │   │   ├── __init__.py
+│   │   │   └── backend_client.py            ← BackendClient
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── detection.py                 ← Detection
+│   │   │   ├── hazard_event.py              ← HazardEvent
+│   │   │   ├── incident.py                  ← Incident
+│   │   │   ├── severity.py                  ← Severity (enum)
+│   │   │   └── status.py                    ← Status (enum)
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── logger.py
+│   │       └── drawing.py
+│   ├── weights/
+│   │   └── .gitkeep
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── test_stream_handler.py
+│   │   ├── test_inference_engine.py
+│   │   ├── test_hazard_analyzer.py
+│   │   ├── test_posture_analyzer.py
+│   │   ├── test_face_blurrer.py
+│   │   ├── test_alert_manager.py
+│   │   ├── test_fcm_service.py
+│   │   ├── test_siren_controller.py
+│   │   └── test_backend_client.py
+│   ├── requirements.txt
+│   └── README.md
+│
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── __init__.py
+│   │   ├── config/
+│   │   │   ├── __init__.py
+│   │   │   ├── settings.py
+│   │   │   └── database.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── routes/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── cameras.py
+│   │   │   │   ├── incidents.py
+│   │   │   │   ├── ergonomics.py
+│   │   │   │   ├── analytics.py
+│   │   │   │   └── users.py
+│   │   │   └── websocket/
+│   │   │       ├── __init__.py
+│   │   │       └── ws_handler.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py
+│   │   │   ├── camera.py
+│   │   │   ├── incident.py
+│   │   │   └── ergonomic_record.py
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py
+│   │   │   ├── camera.py
+│   │   │   ├── incident.py
+│   │   │   └── ergonomic_record.py
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth_service.py              ← AuthService
+│   │   │   ├── camera_service.py
+│   │   │   ├── incident_service.py          ← IncidentService
+│   │   │   ├── ergonomic_service.py         ← ErgonomicService
+│   │   │   └── analytics_service.py         ← AnalyticsService
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── security.py
+│   │       └── dependencies.py
+│   ├── migrations/
+│   │   └── .gitkeep
+│   ├── tests/
+│   │   └── __init__.py
+│   ├── requirements.txt
+│   └── README.md
+│
+├── dashboard/
+│   ├── app.py
+│   ├── pages/
+│   │   ├── live_streams.py
+│   │   ├── incidents.py
+│   │   ├── analytics.py
+│   │   └── camera_management.py
+│   ├── components/
+│   │   ├── sidebar.py
+│   │   ├── video_player.py
+│   │   └── charts.py
+│   ├── static/
+│   │   └── .gitkeep
+│   ├── requirements.txt
+│   └── README.md
+│
+├── mobile_app/
+│   └── README.md
+│
+├── docs/
+│   ├── team1_streaming_doc.md
+│   ├── team2_detection_inference_doc.md
+│   ├── team3_analysis_classification_doc.md
+│   └── team4_alerts_integration_doc.md
+│
+├── .gitignore
+├── docker-compose.yml
+├── README.md
+└── PROJECT_HANDOVER.md

@@ -1,0 +1,281 @@
+"""
+InferenceEngine — Pose-only YOLO model with FP16 inference and ByteTrack.
+
+Design:
+- Owns the GPU.  Only ONE thread ever calls methods on this class.
+- Loads pose model at startup (provides person detection + keypoints).
+- Uses Ultralytics built-in ByteTrack tracker (``model.track(...)``).
+"""
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+from typing import List, Tuple, Any
+
+import numpy as np
+
+from ..settings import (
+    CONF_THRESHOLD,
+    IMGSZ,
+    INFERENCE_DEVICE,
+    IOU_THRESHOLD,
+    MAX_DET,
+    POSE_FALLBACK_WEIGHTS,
+    POSE_WEIGHTS,
+    PROXIMITY_CONF_THRESHOLD,
+    PROXIMITY_FALLBACK_WEIGHTS,
+    PROXIMITY_FORKLIFT_ALIASES,
+    PROXIMITY_IOU_THRESHOLD,
+    PROXIMITY_MAX_DET,
+    PROXIMITY_WEIGHTS,
+)
+from ...models.detection import Detection
+from ...models.frame_bundle import FrameBundle
+
+logger = logging.getLogger(__name__)
+
+# Custom ByteTrack config with higher track_buffer for better re-identification
+_CUSTOM_TRACKER_CFG = Path(__file__).resolve().parent.parent / "bytetrack.yaml"
+
+
+def _resolve_weights(primary: Path, fallback: Path, label: str) -> str:
+    """Return the first weight file that exists as a safe string path.
+
+    PyTorch's C++ PytorchStreamReader can fail on absolute paths containing
+    special characters (e.g. apostrophes, non-ASCII).  We use os.path.relpath()
+    to produce a relative path from the CWD which avoids this issue.
+    """
+    for candidate in (primary, fallback):
+        if candidate.exists():
+            if candidate == fallback:
+                logger.warning(
+                    "%s weights not found at %s — falling back to %s",
+                    label, primary, fallback,
+                )
+            # Prefer relative path to avoid C++ zip reader bugs with special chars
+            try:
+                rel = os.path.relpath(candidate)
+                if os.path.exists(rel):
+                    return rel
+            except ValueError:
+                pass
+            return str(candidate)
+    # Neither exists — return model name for Ultralytics auto-download
+    logger.info(
+        "%s weights not found locally. Attempting Ultralytics auto-download for %s ...",
+        label, primary.name,
+    )
+    return primary.stem  # e.g. "yolo11n-pose" — Ultralytics will attempt download
+
+
+class InferenceEngine:
+    """Pose-only YOLO engine with ByteTrack tracking."""
+
+    def __init__(self) -> None:
+        self._pose_model = None
+        self._pose_loaded = False
+        self._proximity_model = None
+        self._proximity_loaded = False
+        self._proximity_names = {}
+
+        # Resolve actual device
+        import torch
+        if "cuda" in INFERENCE_DEVICE and torch.cuda.is_available():
+            self.device = INFERENCE_DEVICE
+            self._use_half = True
+            logger.info("CUDA available — using %s with FP16", self.device)
+        else:
+            self.device = "cpu"
+            self._use_half = False
+            logger.warning("CUDA not available — falling back to CPU (FP32, slower)")
+
+    # ── Model loading ───────────────────────────────────────────────
+
+    def load_pose(self) -> None:
+        from ultralytics import YOLO
+
+        weights = _resolve_weights(POSE_WEIGHTS, POSE_FALLBACK_WEIGHTS, "Pose")
+        logger.info("Loading pose model: %s", weights)
+
+        try:
+            self._pose_model = YOLO(weights)
+        except Exception as exc:
+            logger.critical("Failed to load pose weights: %s", exc)
+            sys.exit(1)
+
+        dummy = np.zeros((IMGSZ, IMGSZ, 3), dtype=np.uint8)
+        for _ in range(3):
+            self._pose_model.predict(
+                dummy, device=self.device, half=self._use_half,
+                conf=0.9, verbose=False, imgsz=IMGSZ,
+            )
+        self._pose_loaded = True
+        logger.info("Pose model ready")
+
+    def load_proximity(self, profile_weights: str = "") -> bool:
+        """Load optional forklift/person detector.
+
+        Returns True if model loaded, False if weights are unavailable.
+        """
+        from ultralytics import YOLO
+
+        # Primary model is fixed to best_forklift.pt.
+        # Fallback is yolov8n.pt only if primary is missing.
+        candidate: Path | None = None
+        source_label = ""
+        if PROXIMITY_WEIGHTS.exists():
+            candidate = PROXIMITY_WEIGHTS
+            source_label = "primary(best_forklift.pt)"
+        elif PROXIMITY_FALLBACK_WEIGHTS.exists():
+            candidate = PROXIMITY_FALLBACK_WEIGHTS
+            source_label = "fallback(yolov8n.pt)"
+
+        if candidate is None:
+            logger.warning(
+                "Proximity model disabled: no weights found at %s or %s",
+                PROXIMITY_WEIGHTS,
+                PROXIMITY_FALLBACK_WEIGHTS,
+            )
+            return False
+
+        try:
+            rel = os.path.relpath(candidate)
+            weights = rel if os.path.exists(rel) else str(candidate)
+        except ValueError:
+            weights = str(candidate)
+        logger.info("Loading proximity model from %s: %s", source_label, weights)
+
+        try:
+            self._proximity_model = YOLO(weights)
+            self._proximity_names = {
+                int(k): str(v).strip().lower()
+                for k, v in getattr(self._proximity_model, "names", {}).items()
+            }
+            self._proximity_loaded = True
+            logger.info("Proximity model ready: %s", source_label)
+            logger.info("Proximity classes available: %s", list(self._proximity_names.values()))
+            return True
+        except Exception as exc:
+            logger.error("Failed to load proximity model: %s", exc)
+            self._proximity_model = None
+            self._proximity_names = {}
+            self._proximity_loaded = False
+            return False
+
+    # ── Inference ───────────────────────────────────────────────────
+
+    def run_pose_tracker(self, bundle: FrameBundle) -> Tuple[Any, List[Detection], float]:
+        """Run pose model with ByteTrack — returns (raw_pose_results, tracked_detections, latency_ms).
+
+        The pose model detects persons and their keypoints simultaneously.
+        ByteTrack provides persistent track IDs for each person.
+        """
+        assert self._pose_loaded, "Call load_pose() first"
+        t0 = time.perf_counter()
+
+        tracker_cfg = str(_CUSTOM_TRACKER_CFG) if _CUSTOM_TRACKER_CFG.exists() else "bytetrack.yaml"
+        results = self._pose_model.track(
+            bundle.frame,
+            device=self.device,
+            half=self._use_half,
+            imgsz=IMGSZ,
+            conf=CONF_THRESHOLD,
+            iou=IOU_THRESHOLD,
+            max_det=MAX_DET,
+            tracker=tracker_cfg,
+            persist=True,
+            verbose=False,
+        )[0]
+
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        detections: List[Detection] = []
+        if results.boxes is not None and len(results.boxes):
+            for box in results.boxes:
+                tid = int(box.id[0]) if box.id is not None else None
+                detections.append(Detection(
+                    class_id=0,
+                    class_name="person",
+                    confidence=float(box.conf[0]),
+                    bbox=(
+                        int(box.xyxy[0][0]), int(box.xyxy[0][1]),
+                        int(box.xyxy[0][2]), int(box.xyxy[0][3]),
+                    ),
+                    track_id=tid,
+                ))
+
+        return results, detections, latency_ms
+
+    def run_pose(self, bundle: FrameBundle) -> Tuple[Any, float]:
+        """Run pose model (predict only, no tracking).  Returns (raw Results, latency_ms)."""
+        assert self._pose_loaded, "Call load_pose() first"
+        t0 = time.perf_counter()
+        results = self._pose_model.predict(
+            bundle.frame,
+            device=self.device,
+            half=self._use_half,
+            imgsz=IMGSZ,
+            conf=0.40,
+            verbose=False,
+        )[0]
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        return results, latency_ms
+
+    def run_proximity(self, bundle: FrameBundle) -> Tuple[List[Detection], float]:
+        """Run optional detect model for forklift/person proximity."""
+        if not self._proximity_loaded:
+            return [], 0.0
+
+        t0 = time.perf_counter()
+        results = self._proximity_model.predict(
+            bundle.frame,
+            device=self.device,
+            half=self._use_half,
+            imgsz=IMGSZ,
+            conf=PROXIMITY_CONF_THRESHOLD,
+            iou=PROXIMITY_IOU_THRESHOLD,
+            max_det=PROXIMITY_MAX_DET,
+            verbose=False,
+        )[0]
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        detections: List[Detection] = []
+        if results.boxes is not None and len(results.boxes):
+            for box in results.boxes:
+                cid = int(box.cls[0])
+                cname = self._proximity_names.get(cid, str(cid)).lower()
+                norm = cname.replace("-", "_").replace(" ", "_")
+
+                # Keep only classes needed by this pipeline.
+                if (norm in PROXIMITY_FORKLIFT_ALIASES
+                        or ("fork" in norm and "lift" in norm)):
+                    cname = "forklift"
+                if cname not in {"forklift", "person"}:
+                    continue
+
+                detections.append(Detection(
+                    class_id=cid,
+                    class_name=cname,
+                    confidence=float(box.conf[0]),
+                    bbox=(
+                        int(box.xyxy[0][0]), int(box.xyxy[0][1]),
+                        int(box.xyxy[0][2]), int(box.xyxy[0][3]),
+                    ),
+                    track_id=None,
+                ))
+
+        return detections, latency_ms
+
+    # ── Diagnostics ─────────────────────────────────────────────────
+
+    @staticmethod
+    def vram_used_mb() -> int:
+        """Current VRAM allocated (MB).  Returns 0 on CPU."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return int(torch.cuda.memory_allocated() / (1024 * 1024))
+        except Exception:
+            pass
+        return 0

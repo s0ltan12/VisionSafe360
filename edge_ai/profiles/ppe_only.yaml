@@ -1,0 +1,43 @@
+# VisionSafe 360 — Ergonomics Only Profile
+# Ergonomic risk assessment only — no fall detection.
+
+profile_name: ergonomics_only
+description: "Ergonomic risk assessment (RULA/REBA) only"
+
+modules:
+  pose:
+    enabled: true
+    weights: ""
+    schedule_every_n: 1
+
+  hazard_analyzer:
+    enabled: true
+    sub_modules:
+      fall:
+        enabled: false
+        weights: ""
+        schedule_every_n: 1
+
+  posture_analyzer:
+    enabled: true
+    weights: ""
+    schedule_every_n: 10
+
+ui:
+  enable_detections:    true
+  enable_pose:          true
+  enable_zones:         false
+  enable_hazards:       true
+  enable_worker_panels: true
+  enable_hud:           true
+  enable_banners:       true
+  overlay_scale:        1.0
+  max_worker_panels:    6
+  panel_anchor_mode:    auto_avoid_overlap
+  hazard_fill_critical: false
+  hazard_fill_high:     false
+  hazard_fill_medium:   false
+  banner_critical_sec:  2.5
+  banner_max:           3
+  perf_budget_ms:       2.0
+  auto_degrade:         true

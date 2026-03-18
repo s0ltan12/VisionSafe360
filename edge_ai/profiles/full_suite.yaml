@@ -1,0 +1,48 @@
+# VisionSafe 360 — Full Suite Profile (Pose-Only)
+# Fall detection + ergonomic risk assessment.
+
+profile_name: full_suite
+description: "Fall detection + ergonomic assessment (pose-only pipeline)"
+
+modules:
+  pose:
+    enabled: true
+    weights: ""                   # empty = use POSE_WEIGHTS from settings
+    schedule_every_n: 1           # every frame (pose is the primary model)
+
+  hazard_analyzer:
+    enabled: true
+    sub_modules:
+      fall:
+        enabled: true
+        weights: ""
+        schedule_every_n: 1
+
+  posture_analyzer:
+    enabled: true
+    weights: ""                   # empty = use shared pose output
+    schedule_every_n: 10          # ~1.5 Hz
+
+  proximity_analyzer:
+    enabled: true
+    weights: "forklift/best_forklift.pt"   # trained forklift model
+    schedule_every_n: 2            # run at ~7.5 Hz when infer fps=15
+
+ui:
+  enable_detections:    true
+  enable_pose:          true
+  enable_zones:         false
+  enable_hazards:       true
+  enable_worker_panels: true
+  enable_hud:           true
+  enable_banners:       true
+  overlay_scale:        1.0
+  max_worker_panels:    8
+  panel_anchor_mode:    auto_avoid_overlap
+  hazard_fill_critical: true
+  hazard_fill_high:     true
+  hazard_fill_medium:   false
+  banner_critical_sec:  2.5
+  banner_max:           3
+  perf_budget_ms:       2.0
+  auto_degrade:         true

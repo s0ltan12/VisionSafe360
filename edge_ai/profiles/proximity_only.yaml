@@ -1,0 +1,47 @@
+# VisionSafe 360 — Proximity Profile
+# Forklift/person proximity only (keeps pose for tracking IDs).
+
+profile_name: proximity_only
+description: "Forklift proximity detection only"
+
+modules:
+  pose:
+    enabled: true
+    weights: ""
+    schedule_every_n: 1
+
+  hazard_analyzer:
+    enabled: false
+    sub_modules:
+      fall:
+        enabled: false
+        weights: ""
+        schedule_every_n: 1
+
+  posture_analyzer:
+    enabled: false
+    weights: ""
+    schedule_every_n: 10
+
+  proximity_analyzer:
+    enabled: true
+    weights: "forklift/best_forklift.pt"
+    schedule_every_n: 2
+
+ui:
+  enable_detections:    true
+  enable_pose:          true
+  enable_zones:         false
+  enable_hazards:       true
+  enable_worker_panels: false
+  enable_hud:           true
+  enable_banners:       true
+  overlay_scale:        1.0
+  max_worker_panels:    0
+  hazard_fill_critical: false
+  hazard_fill_high:     false
+  hazard_fill_medium:   false
+  banner_critical_sec:  2.5
+  banner_max:           0
+  perf_budget_ms:       2.0
+  auto_degrade:         true

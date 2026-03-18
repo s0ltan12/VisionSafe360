@@ -1,0 +1,9 @@
+# VisionSafe 360 — Edge AI dependencies (Step 1)
+# Tested on Python 3.10+ with CUDA 12.x
+
+ultralytics>=8.3.0        # YOLO11 support (includes ByteTrack)
+opencv-python>=4.8.0
+numpy>=1.24.0
+torch>=2.1.0              # CUDA wheels — install per https://pytorch.org/get-started
+torchvision>=0.16.0
+lapx>=0.5.2               # ByteTrack dependency (fast LAP solver)

@@ -1,0 +1,11 @@
+# VisionSafe360 — Custom ByteTrack config
+# Higher track_buffer keeps lost tracks alive longer,
+# preventing new IDs when a person briefly leaves and re-enters the frame.
+
+tracker_type: bytetrack
+track_high_thresh: 0.20   # slightly lower to keep more person candidates
+track_low_thresh: 0.05
+new_track_thresh: 0.25    # allow new tracks under mild confidence drops
+track_buffer: 180         # ~12s at 15 FPS (default was 30 ≈ 2s)
+match_thresh: 0.85
+fuse_score: True
