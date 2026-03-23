@@ -25,7 +25,7 @@ modules:
 
   proximity_analyzer:
     enabled: false
-    weights: "forklift/best.pt"
+    weights: "weights/forklift/best_forklift.pt"
     schedule_every_n: 2
 
 ui:

@@ -41,6 +41,8 @@ class StreamHandler:
 
         # Latest-frame buffer — the centrepiece of the architecture
         self.buffer: deque[FrameBundle] = deque(maxlen=STREAM_BUFFER_SIZE)
+        # deque is not safe for concurrent append (capture thread) + pop (main thread).
+        self._buffer_lock = threading.Lock()
 
         # Threading
         self._stop_event = threading.Event()
@@ -76,10 +78,11 @@ class StreamHandler:
 
     def get_frame(self) -> Optional[FrameBundle]:
         """Non-blocking pop of the latest frame (or ``None`` if empty)."""
-        try:
-            return self.buffer.pop()
-        except IndexError:
-            return None
+        with self._buffer_lock:
+            try:
+                return self.buffer.pop()
+            except IndexError:
+                return None
 
     @property
     def is_running(self) -> bool:
@@ -155,11 +158,12 @@ class StreamHandler:
                     frame_number=self.total_frames_read,
                 )
 
-                # deque(maxlen=1): if buffer was full, the old frame is auto-evicted
-                was_full = len(self.buffer) == self.buffer.maxlen
-                self.buffer.append(bundle)
-                if was_full:
-                    self.dropped_count += 1
+                with self._buffer_lock:
+                    # deque(maxlen=1): if buffer was full, the old frame is auto-evicted
+                    was_full = len(self.buffer) == self.buffer.maxlen
+                    self.buffer.append(bundle)
+                    if was_full:
+                        self.dropped_count += 1
 
                 self.total_frames_read += 1
                 local_count += 1

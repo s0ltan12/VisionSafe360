@@ -16,6 +16,7 @@ from typing import List, Tuple, Any
 import numpy as np
 
 from ..settings import (
+    BASE_DIR,
     CONF_THRESHOLD,
     IMGSZ,
     INFERENCE_DEVICE,
@@ -116,18 +117,27 @@ class InferenceEngine:
     def load_proximity(self, profile_weights: str = "") -> bool:
         """Load optional forklift/person detector.
 
+        If ``profile_weights`` is set and the path exists (relative to ``edge_ai/``),
+        it is used; otherwise falls back to ``PROXIMITY_WEIGHTS`` / ``PROXIMITY_FALLBACK_WEIGHTS``.
+
         Returns True if model loaded, False if weights are unavailable.
         """
         from ultralytics import YOLO
 
-        # Primary model is fixed to best_forklift.pt.
-        # Fallback is yolov8n.pt only if primary is missing.
         candidate: Path | None = None
         source_label = ""
-        if PROXIMITY_WEIGHTS.exists():
+        if profile_weights and profile_weights.strip():
+            pw = Path(profile_weights.strip())
+            if not pw.is_absolute():
+                pw = BASE_DIR / pw
+            if pw.exists():
+                candidate = pw
+                source_label = f"profile({profile_weights.strip()})"
+
+        if candidate is None and PROXIMITY_WEIGHTS.exists():
             candidate = PROXIMITY_WEIGHTS
             source_label = "primary(best_forklift.pt)"
-        elif PROXIMITY_FALLBACK_WEIGHTS.exists():
+        if candidate is None and PROXIMITY_FALLBACK_WEIGHTS.exists():
             candidate = PROXIMITY_FALLBACK_WEIGHTS
             source_label = "fallback(yolov8n.pt)"
 

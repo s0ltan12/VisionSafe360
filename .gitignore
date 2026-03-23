@@ -43,6 +43,9 @@ Thumbs.db
 *.zip
 output/
 **/output/
+offline_queue.db
+*.db
+STEP2_COMPLETION_REPORT.md
 **/fall_snapshots/
 
 # Model binaries (can be fetched separately)
