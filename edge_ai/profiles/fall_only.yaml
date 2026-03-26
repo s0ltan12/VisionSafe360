@@ -3,6 +3,7 @@
 
 profile_name: fall_only
 description: "Fall detection only — minimal resource usage"
+person_tracker_source: ppe
 
 modules:
   pose:
@@ -26,6 +27,11 @@ modules:
   proximity_analyzer:
     enabled: false
     weights: "weights/forklift/best_forklift.pt"
+    schedule_every_n: 2
+
+  ppe_analyzer:
+    enabled: true
+    weights: "SH17dataset-master/yolo9e.pt"
     schedule_every_n: 2
 
 ui:

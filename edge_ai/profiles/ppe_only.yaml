@@ -1,8 +1,8 @@
-# VisionSafe 360 — Ergonomics Only Profile
-# Ergonomic risk assessment only — no fall detection.
+# VisionSafe 360 — PPE Only Profile
+# PPE compliance view with SH17 detector.
 
-profile_name: ergonomics_only
-description: "Ergonomic risk assessment (RULA/REBA) only"
+profile_name: ppe_only
+description: "PPE monitoring only (helmet, gloves, mask, vest, suit, shoes, etc.)"
 
 modules:
   pose:
@@ -11,7 +11,7 @@ modules:
     schedule_every_n: 1
 
   hazard_analyzer:
-    enabled: true
+    enabled: false
     sub_modules:
       fall:
         enabled: false
@@ -19,18 +19,28 @@ modules:
         schedule_every_n: 1
 
   posture_analyzer:
-    enabled: true
+    enabled: false
     weights: ""
     schedule_every_n: 10
+
+  proximity_analyzer:
+    enabled: false
+    weights: "weights/forklift/best_forklift.pt"
+    schedule_every_n: 2
+
+  ppe_analyzer:
+    enabled: true
+    weights: "SH17dataset-master/yolo9e.pt"
+    schedule_every_n: 2
 
 ui:
   enable_detections:    true
   enable_pose:          true
   enable_zones:         false
-  enable_hazards:       true
+  enable_hazards:       false
   enable_worker_panels: true
   enable_hud:           true
-  enable_banners:       true
+  enable_banners:       false
   overlay_scale:        1.0
   max_worker_panels:    6
   panel_anchor_mode:    auto_avoid_overlap
@@ -38,6 +48,6 @@ ui:
   hazard_fill_high:     false
   hazard_fill_medium:   false
   banner_critical_sec:  2.5
-  banner_max:           3
+  banner_max:           2
   perf_budget_ms:       2.0
   auto_degrade:         true

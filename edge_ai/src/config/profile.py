@@ -49,6 +49,8 @@ class ProfileConfig:
     modules: Dict[str, ModuleConfig] = field(default_factory=dict)
     # Raw ``ui:`` section from the profile YAML — consumed by UISettings
     ui_config: dict = field(default_factory=dict)
+    # Source for person tracking: "pose" (default) or "ppe"
+    person_tracker_source: str = "pose"
 
     # ── Convenience accessors ───────────────────────────────────────
 
@@ -147,6 +149,15 @@ def load_profile(name_or_path: Optional[str] = None) -> ProfileConfig:
             profile.modules[mod_name] = _parse_module(mod_cfg)
 
     profile.ui_config = data.get("ui", {})
+    profile.person_tracker_source = str(
+        data.get("person_tracker_source", "pose")
+    ).strip().lower()
+    if profile.person_tracker_source not in {"pose", "ppe"}:
+        logger.warning(
+            "Invalid person_tracker_source='%s' in profile; falling back to 'pose'",
+            profile.person_tracker_source,
+        )
+        profile.person_tracker_source = "pose"
 
     logger.info("Loaded profile: %s — %s", profile.profile_name, profile.description)
     return profile

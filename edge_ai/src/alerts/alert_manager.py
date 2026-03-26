@@ -156,11 +156,11 @@ class AlertManager:
 				continue
 
 			if self.config.async_delivery_enabled:
-				self._enqueue_backend(event, metrics)
 				self._enqueue_fcm(event, metrics)
+				self._enqueue_backend(event, metrics)
 			else:
-				self._route_backend(event, metrics)
 				self._route_fcm(event, metrics)
+				self._route_backend(event, metrics)
 			self._route_siren(event, metrics)
 
 		if self.config.async_delivery_enabled:
@@ -248,6 +248,10 @@ class AlertManager:
 		if not self._should_send_fcm(event.severity):
 			return
 
+		# If FCM is enabled but has no recipients configured, skip routing.
+		if not self._fcm_has_recipients():
+			return
+
 		if self.fcm_service is None:
 			metrics.add(
 				DeliveryResult(
@@ -305,6 +309,10 @@ class AlertManager:
 		if not self._should_send_fcm(event.severity):
 			return
 
+		# If FCM is enabled but has no recipients configured, skip routing.
+		if not self._fcm_has_recipients():
+			return
+
 		if self._queue is None:
 			self._route_fcm(event, metrics)
 			return
@@ -358,7 +366,10 @@ class AlertManager:
 
 		event = task.event
 		if task.channel == DeliveryChannel.BACKEND:
-			result = self.backend_client.submit_incident(event)
+			if hasattr(self.backend_client, "submit_incident_fast"):
+				result = self.backend_client.submit_incident_fast(event)
+			else:
+				result = self.backend_client.submit_incident(event)
 			if result == BackendDeliveryResult.SKIPPED:
 				return
 			self._record_async_delivery_result(
@@ -374,6 +385,8 @@ class AlertManager:
 			return
 
 		if task.channel == DeliveryChannel.FCM:
+			if not self._fcm_has_recipients():
+				return
 			if self.fcm_service is None:
 				self._record_async_delivery_result(DeliveryChannel.FCM, False)
 				return
@@ -453,6 +466,29 @@ class AlertManager:
 		if severity == Severity.MEDIUM:
 			return self.config.medium_fcm_enabled
 		return severity in {Severity.HIGH, Severity.CRITICAL}
+
+	def _fcm_has_recipients(self) -> bool:
+		"""Return True when FCM is actually routable to at least one token.
+
+		For test stubs that do not expose a config object, assume routable.
+		"""
+
+		if self.fcm_service is None:
+			return False
+
+		cfg = getattr(self.fcm_service, "config", None)
+		if cfg is None:
+			return True
+
+		enabled = getattr(cfg, "enabled", True)
+		if not enabled:
+			return False
+
+		tokens = getattr(cfg, "device_tokens", None)
+		if tokens is None:
+			return True
+
+		return len(tokens) > 0
 
 	def _record_async_delivery_result(self, channel: DeliveryChannel, ok: bool) -> None:
 		"""Thread-safe aggregate of worker-completed delivery outcomes."""

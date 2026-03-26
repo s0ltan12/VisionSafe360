@@ -90,6 +90,10 @@ class SafetyOverlayRenderer:
 
         self._degraded: bool = False
         self.last_render_ms: float = 0.0
+        # Hysteresis counters to avoid panel flicker when render cost
+        # oscillates around perf_budget_ms.
+        self._over_budget_frames: int = 0
+        self._under_budget_frames: int = 0
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -171,7 +175,29 @@ class SafetyOverlayRenderer:
         # ── Performance feedback ─────────────────────────────────────
         self.last_render_ms = (time.perf_counter() - t0) * 1000.0
         if cfg.auto_degrade:
-            self._degraded = self.last_render_ms > cfg.perf_budget_ms
+            over = self.last_render_ms > cfg.perf_budget_ms
+            # Recovery needs to be meaningfully below the budget to avoid
+            # rapid toggling.
+            under = self.last_render_ms < (cfg.perf_budget_ms * 0.8)
+            if over:
+                self._over_budget_frames += 1
+                self._under_budget_frames = 0
+            elif under:
+                self._under_budget_frames += 1
+                self._over_budget_frames = 0
+            else:
+                # In the deadband: don't advance counters.
+                pass
+
+            # Tune these two constants for stability rather than aggressiveness.
+            degrade_after = 3
+            recover_after = 3
+            if not self._degraded and self._over_budget_frames >= degrade_after:
+                self._degraded = True
+                self._under_budget_frames = 0
+            elif self._degraded and self._under_budget_frames >= recover_after:
+                self._degraded = False
+                self._over_budget_frames = 0
 
         return frame
 

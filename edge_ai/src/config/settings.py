@@ -64,6 +64,10 @@ POSE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "yolov8n-pose.pt"
 PROXIMITY_WEIGHTS = BASE_DIR / "weights" / "forklift" / "best_forklift.pt"
 PROXIMITY_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "forklift" / "yolov8n.pt"
 
+# --- Optional PPE detector (SH17 model)
+PPE_WEIGHTS = BASE_DIR / "SH17dataset-master" / "yolo9e.pt"
+PPE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "ppe" / "best_ppe.pt"
+
 # --- Inference parameters
 IMGSZ = 640  # DO NOT increase - each +64px ~ +15% VRAM
 PRECISION = "fp16"  # half=True on CUDA: halves VRAM, ~2× faster
@@ -76,6 +80,11 @@ INFERENCE_DEVICE = "cuda:0"  # will fall back to "cpu" if CUDA unavailable
 PROXIMITY_CONF_THRESHOLD = 0.35
 PROXIMITY_IOU_THRESHOLD = 0.45
 PROXIMITY_MAX_DET = 50
+
+# Optional third model params (PPE)
+PPE_CONF_THRESHOLD = 0.25
+PPE_IOU_THRESHOLD = 0.45
+PPE_MAX_DET = 100
 
 # When using generic COCO weights, forklift is often classified as "truck".
 PROXIMITY_FORKLIFT_ALIASES = {"forklift", "truck"}
@@ -97,7 +106,10 @@ ERGONOMIC_EVERY_N = 10  # ~1.5 Hz
 RTSP_TIMEOUT_SEC = 10
 RTSP_MAX_RETRIES = 5
 RTSP_RETRY_BACKOFF = [1, 2, 4, 8, 16]  # seconds between retries
-STREAM_BUFFER_SIZE = 1  # deque(maxlen=1) - latest-frame policy
+# Latest-frame policy: keep only the newest frame available.
+STREAM_BUFFER_SIZE = max(1, _env_int("VISIONSAFE_STREAM_BUFFER_SIZE", 1))
+# For deterministic analytics (and unit tests), default to looping files.
+LOOP_FILE_SOURCE = _env_bool("VISIONSAFE_LOOP_FILE_SOURCE", True)
 
 # --- Output
 OUTPUT_DIR = BASE_DIR / "output"
@@ -155,6 +167,14 @@ OFFLINE_QUEUE_MAX_ROWS = _env_int("VISIONSAFE_OFFLINE_QUEUE_MAX_ROWS", 5000)
 OFFLINE_FLUSH_INTERVAL_SEC = _env_float(
     "VISIONSAFE_OFFLINE_FLUSH_INTERVAL_SEC",
     5.0,
+)
+OFFLINE_FLUSH_MAX_PER_CYCLE = _env_int(
+    "VISIONSAFE_OFFLINE_FLUSH_MAX_PER_CYCLE",
+    1,
+)
+OFFLINE_SHUTDOWN_FLUSH_LIMIT = _env_int(
+    "VISIONSAFE_OFFLINE_SHUTDOWN_FLUSH_LIMIT",
+    1,
 )
 
 # --- Alerting & integration (Step 4)

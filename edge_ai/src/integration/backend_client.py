@@ -12,7 +12,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -139,6 +139,31 @@ class BackendClient:
 			return DeliveryResult.SKIPPED
 
 		ok, error = self._post_with_retry(payload)
+		if ok:
+			return DeliveryResult.OK
+
+		self._enqueue_offline(payload, error or "unknown_error")
+		return DeliveryResult.FAILED
+
+	def submit_incident_fast(self, event: HazardEvent) -> DeliveryResult:
+		"""Submit one hazard event with single-attempt fast-fail behavior.
+
+		This method is intended for asynchronous/background delivery paths where
+		latency must stay bounded. It preserves offline buffering guarantees while
+		skipping retry/backoff loops.
+		"""
+
+		payload = self._event_to_payload(event)
+		if not self.config.enabled:
+			logger.info(
+				"backend delivery skipped (disabled) event_type=%s severity=%s camera_id=%s",
+				event.event_type,
+				event.severity.name,
+				event.camera_id,
+			)
+			return DeliveryResult.SKIPPED
+
+		ok, error = self._post_once(payload)
 		if ok:
 			return DeliveryResult.OK
 
@@ -366,8 +391,7 @@ class BackendClient:
 	@staticmethod
 	def _event_to_payload(event: HazardEvent) -> dict:
 		# Convert HazardEvent to backend incident payload.
-
-		return {
+		payload = {
 			"event_type": event.event_type,
 			"severity": event.severity.name,
 			"camera_id": event.camera_id,
@@ -378,3 +402,41 @@ class BackendClient:
 			"metadata": event.metadata,
 			"bbox": list(event.bbox) if event.bbox else None,
 		}
+		return BackendClient._to_json_safe(payload)
+
+	@staticmethod
+	def _to_json_safe(value: Any) -> Any:
+		"""Recursively normalize values into JSON-serializable primitives.
+
+		Handles numpy scalar/array-like values through ``item``/``tolist`` when
+		present, without introducing a hard numpy dependency here.
+		"""
+
+		if value is None or isinstance(value, (str, int, float, bool)):
+			return value
+
+		if isinstance(value, dict):
+			return {
+				str(k): BackendClient._to_json_safe(v)
+				for k, v in value.items()
+			}
+
+		if isinstance(value, (list, tuple, set)):
+			return [BackendClient._to_json_safe(v) for v in value]
+
+		# numpy scalar-like (e.g., np.float32, np.int64)
+		if hasattr(value, "item"):
+			try:
+				return BackendClient._to_json_safe(value.item())
+			except Exception:
+				pass
+
+		# numpy array-like
+		if hasattr(value, "tolist"):
+			try:
+				return BackendClient._to_json_safe(value.tolist())
+			except Exception:
+				pass
+
+		# Last-resort safe representation to avoid delivery crashes.
+		return str(value)

@@ -131,6 +131,11 @@ class DetectionsLayer:
                         _worker_sev[tid] = sev_val
 
         for det in detections:
+            # Keep the scene readable: PPE micro-objects are displayed in worker
+            # panels, not as on-frame dashed boxes.
+            if det.class_name not in {"person", "forklift"}:
+                continue
+
             x1, y1, x2, y2 = det.bbox
             # Clamp to frame boundaries
             x1, y1 = max(0, x1), max(0, y1)

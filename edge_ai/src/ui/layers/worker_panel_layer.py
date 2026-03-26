@@ -31,13 +31,38 @@ from ...config.ui_settings import UISettings
 
 _PERSON_CLASS = "person"
 
-# PPE items: (display_name, positive_class, negative_class)
+# Core factory PPE items (high-frequency essentials across most plants).
 _PPE_ITEMS = [
-    ("Hard Hat",        "helmet_on",  "helmet_off"),
-    ("Gloves",          None,         None),
-    ("Glasses",         None,         None),
-    ("Reflective Vest", "vest_on",    "vest_off"),
-    ("Mask",            None,         None),
+    {
+        "name": "Helmet",
+        "positive": {"helmet_on", "helmet", "hard_hat", "hardhat"},
+        "negative": {"helmet_off", "head", "no_helmet", "bare_head"},
+    },
+    {
+        "name": "Gloves",
+        "positive": {"gloves_on", "gloves", "glove"},
+        "negative": {"gloves_off", "hands", "hand", "no_gloves", "bare_hands"},
+    },
+    {
+        "name": "Glasses",
+        "positive": {"glasses", "goggles", "eye_protection"},
+        "negative": {"face"},
+    },
+    {
+        "name": "Face Mask",
+        "positive": {"face_mask", "mask", "face-mask"},
+        "negative": {"face"},
+    },
+    {
+        "name": "Safety Vest",
+        "positive": {"safety_vest", "vest_on", "vest", "safety-vest"},
+        "negative": set(),
+    },
+    {
+        "name": "Safety Shoes",
+        "positive": {"shoes", "safety_shoes", "boots"},
+        "negative": {"foot", "bare_foot"},
+    },
 ]
 
 # BGR colours
@@ -109,6 +134,8 @@ def _place_panel(
 ) -> Tuple[int, int, str]:
     x1, y1, x2, y2 = det.bbox
     chosen_side = locked_side or "L"
+    # Keep the panel near the bbox while still leaving a small visual gap.
+    horiz_gap = 6
 
     def _clamp(px: int, py: int) -> Tuple[int, int]:
         return max(0, min(px, fw - pw)), max(0, min(py, fh - ph))
@@ -118,16 +145,16 @@ def _place_panel(
     else:
         # Decide side (left vs right of bbox)
         if locked_side == "L":
-            px, py = _clamp(x1 - pw - 8, y1)
+            px, py = _clamp(x1 - pw - horiz_gap, y1)
         elif locked_side == "R":
-            px, py = _clamp(x2 + 8, y1)
+            px, py = _clamp(x2 + horiz_gap, y1)
         else:
             # First time: prefer left, fallback right
-            if x1 - pw - 8 >= 0:
-                px, py = _clamp(x1 - pw - 8, y1)
+            if x1 - pw - horiz_gap >= 0:
+                px, py = _clamp(x1 - pw - horiz_gap, y1)
                 chosen_side = "L"
             else:
-                px, py = _clamp(x2 + 8, y1)
+                px, py = _clamp(x2 + horiz_gap, y1)
                 chosen_side = "R"
 
     if mode == "auto_avoid_overlap":
@@ -135,10 +162,11 @@ def _place_panel(
             r = (px, py, px + pw, py + ph)
             if not any(_rects_overlap(r, o) for o in occupied):
                 break
-            py += ph + 6
+            # When cards collide, prefer a smaller step so panels stay close.
+            py += ph + 2
             if py + ph > fh:
                 py = 0
-                px = max(0, min(px + pw + 4, fw - pw))
+                px = max(0, min(px + pw + 2, fw - pw))
         px, py = _clamp(px, py)
 
     return px, py, chosen_side
@@ -169,6 +197,32 @@ class WorkerPanelLayer:
         self.cfg = cfg or UISettings()
         self._smoother = _PositionSmoother(alpha=0.10)
         self._buf: np.ndarray | None = None
+        # PPE state smoothing keyed by stable worker track_id.
+        # When PPE association briefly becomes "unknown" (None), we keep
+        # the last known state for a short grace window to prevent flicker.
+        self._ppe_grace_frames: int = 5
+        self._ppe_state: Dict[int, Dict[str, Optional[bool]]] = {}
+        self._ppe_none_age: Dict[int, Dict[str, int]] = {}
+        # If ByteTrack / detection temporarily loses a person track, we still
+        # want the panel (and its PPE lines) to remain visible briefly.
+        self._person_grace_frames: int = 5
+        self._no_person_age: int = 0
+        # Cache the last rendered panel specs so we can re-render during
+        # short track loss windows.
+        self._last_specs: list[
+            Tuple[
+                Detection,
+                int,  # tid
+                int,  # did
+                int,  # conf%
+                Dict[str, Optional[bool]],  # ppe
+                List[HazardEvent],  # haz
+                int,  # px
+                int,  # py
+                int,  # pw
+                int,  # ph
+            ]
+        ] = []
 
     def _blend_buf(self, frame: np.ndarray) -> np.ndarray:
         if self._buf is None or self._buf.shape != frame.shape:
@@ -193,14 +247,64 @@ class WorkerPanelLayer:
                     nearby[d.class_name] = d.confidence
 
         out: Dict[str, Optional[bool]] = {}
-        for name, pos_cls, neg_cls in _PPE_ITEMS:
-            if pos_cls and pos_cls in nearby:
-                out[name] = True
-            elif neg_cls and neg_cls in nearby:
+        decision_conf_min = 0.15
+        for item in _PPE_ITEMS:
+            name = item["name"]
+            pos_aliases = item["positive"]
+            neg_aliases = item["negative"]
+            best_pos = max(
+                (nearby[a] for a in pos_aliases if a in nearby),
+                default=None,
+            )
+            best_neg = max(
+                (nearby[a] for a in neg_aliases if a in nearby),
+                default=None,
+            )
+
+            if best_pos is not None and best_pos >= decision_conf_min:
+                # Prefer whichever side has higher confidence.
+                if best_neg is None or best_pos >= best_neg:
+                    out[name] = True
+                else:
+                    out[name] = False
+            elif best_neg is not None and best_neg >= decision_conf_min:
                 out[name] = False
             else:
                 out[name] = None
         return out
+
+    def _smooth_ppe_status(
+        self,
+        tid: int,
+        ppe_now: Dict[str, Optional[bool]],
+    ) -> Dict[str, Optional[bool]]:
+        """Hold last known PPE state for a few frames when None appears."""
+        if tid not in self._ppe_state:
+            self._ppe_state[tid] = dict(ppe_now)
+            self._ppe_none_age[tid] = {k: 0 for k in ppe_now.keys()}
+            return self._ppe_state[tid]
+
+        cached = self._ppe_state[tid]
+        ages = self._ppe_none_age[tid]
+
+        for name, val in ppe_now.items():
+            if val is None:
+                if cached.get(name) is None:
+                    # No prior evidence.
+                    ages[name] = 0
+                    continue
+                # We have prior state; keep it briefly.
+                ages[name] = ages.get(name, 0) + 1
+                if ages[name] <= self._ppe_grace_frames:
+                    cached[name] = cached[name]
+                else:
+                    cached[name] = None
+                    ages[name] = 0
+            else:
+                cached[name] = val
+                ages[name] = 0
+
+        return cached
 
     # ── Main draw ────────────────────────────────────────────────────
 
@@ -214,9 +318,6 @@ class WorkerPanelLayer:
         degraded: bool = False,
     ) -> None:
         """Draw worker info panels onto *frame* in-place."""
-        if degraded:
-            return
-
         cfg = self.cfg
         fh, fw = frame.shape[:2]
 
@@ -227,8 +328,146 @@ class WorkerPanelLayer:
         )[:cfg.max_worker_panels]
 
         if not persons:
+            # Track loss: keep the last panels visible for a few frames.
+            if self._last_specs and self._no_person_age < self._person_grace_frames:
+                self._no_person_age += 1
+                specs = self._last_specs
+                # Background pass (cheap in degraded mode)
+                if degraded:
+                    for *_, px, py, pw, ph in specs:
+                        cv2.rectangle(frame, (px, py), (px + pw, py + ph), _LIGHT_BG, -1)
+                else:
+                    bg = self._blend_buf(frame)
+                    for *_, px, py, pw, ph in specs:
+                        cv2.rectangle(bg, (px, py), (px + pw, py + ph), _LIGHT_BG, -1)
+                    cv2.addWeighted(bg, 0.75, frame, 0.25, 0, frame)
+
+                # Per-panel rendering
+                for person, tid, did, conf, ppe, haz, px, py, pw, ph in specs:
+                    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _ORANGE, 2)
+                    bx1, by1, bx2, by2 = person.bbox
+                    conn_x = bx1 if (px + pw) < bx1 else bx2
+                    conn_y = (by1 + by2) // 2
+                    cv2.line(
+                        frame,
+                        (px + pw // 2, py + ph // 2),
+                        (max(0, min(conn_x, fw - 1)), max(0, min(conn_y, fh - 1))),
+                        _ORANGE,
+                        1,
+                        cv2.LINE_AA,
+                    )
+
+                    hdr_h = 17 + 6
+                    cv2.rectangle(frame, (px, py), (px + pw, py + hdr_h), _ORANGE, -1)
+
+                    pad = 6
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    scale = cfg.overlay_scale
+                    sm = 0.34 * scale
+                    md = 0.40 * scale
+
+                    ty = py + hdr_h - 5
+                    cv2.putText(
+                        frame,
+                        f"Worker ID : {did}",
+                        (px + pad, ty),
+                        font,
+                        md,
+                        _DARK_TEXT,
+                        1,
+                        cv2.LINE_AA,
+                    )
+                    ty = py + hdr_h + 17 - 2
+                    cv2.putText(
+                        frame,
+                        f"Confidence: {conf}%",
+                        (px + pad, ty),
+                        font,
+                        sm,
+                        _DARK_TEXT,
+                        1,
+                        cv2.LINE_AA,
+                    )
+
+                    row_h = 17
+                    # Match the normal layout: advance one row before separator line.
+                    ty += row_h
+                    sep_y = ty - 8
+                    cv2.line(frame, (px + pad, sep_y), (px + pw - pad, sep_y), _GRAY_MK, 1)
+
+                    cv2.putText(
+                        frame,
+                        "Equipped PPEs:",
+                        (px + pad, ty),
+                        font,
+                        sm,
+                        _DARK_TEXT,
+                        1,
+                        cv2.LINE_AA,
+                    )
+                    ty += row_h
+
+                    for item in _PPE_ITEMS:
+                        name = item["name"]
+                        status = ppe.get(name)
+                        if status is True:
+                            mk, mc = "v", _GREEN_MK
+                        elif status is False:
+                            mk, mc = "X", _RED_MK
+                        else:
+                            mk, mc = "X", _RED_MK
+                        cv2.putText(frame, mk, (px + pad, ty), font, sm, mc, 1, cv2.LINE_AA)
+                        cv2.putText(
+                            frame,
+                            name,
+                            (px + pad + 16, ty),
+                            font,
+                            sm,
+                            _DARK_TEXT,
+                            1,
+                            cv2.LINE_AA,
+                        )
+                        ty += row_h
+
+                    # Hazards (optional)
+                    if haz:
+                        sep_y2 = ty - 8
+                        cv2.line(
+                            frame, (px + pad, sep_y2), (px + pw - pad, sep_y2), _GRAY_MK, 1
+                        )
+                        for ev in haz:
+                            hc = {
+                                Severity.CRITICAL: (0, 0, 220),
+                                Severity.HIGH: _ORANGE,
+                                Severity.MEDIUM: (0, 200, 200),
+                            }.get(ev.severity, _GRAY_MK)
+                            short = ev.event_type.replace("_", " ").upper()[:18]
+                            cv2.putText(
+                                frame,
+                                f"[!] {short}",
+                                (px + pad, ty),
+                                font,
+                                sm * 0.9,
+                                hc,
+                                1,
+                                cv2.LINE_AA,
+                            )
+                            ty += row_h
+
+                return
+
+            # Grace window ended: clear panel caches.
+            self._no_person_age = 0
+            self._last_specs = []
             self._smoother.cleanup()
+            self._ppe_state.clear()
+            self._ppe_none_age.clear()
             return
+
+        # Normal path (persons exist)
+        self._no_person_age = 0
+
+        active_tids = {p.track_id for p in persons if p.track_id is not None}
 
         # Hazard events grouped by track
         wk_ev: Dict[int, List[HazardEvent]] = defaultdict(list)
@@ -242,7 +481,8 @@ class WorkerPanelLayer:
         md = 0.40 * scale
         row_h = 17
         pad = 6
-        panel_w = max(cfg.panel_width, 160)
+        # Respect profile width; allow smaller panels to reduce collisions.
+        panel_w = max(int(cfg.panel_width), 120)
 
         occupied: List[Tuple[int, int, int, int]] = []
         specs = []
@@ -252,9 +492,11 @@ class WorkerPanelLayer:
             did = (display_id_map or {}).get(tid, tid)
             conf = int(person.confidence * 100)
 
-            ppe = self._ppe_status(person, detections) if ppe_capable else {
-                n: None for n, _, _ in _PPE_ITEMS
-            }
+            if ppe_capable:
+                ppe_now = self._ppe_status(person, detections)
+                ppe = self._smooth_ppe_status(tid, ppe_now)
+            else:
+                ppe = {item["name"]: None for item in _PPE_ITEMS}
 
             haz = sorted(wk_ev.get(tid, []),
                          key=lambda e: e.severity, reverse=True)[:2]
@@ -281,11 +523,20 @@ class WorkerPanelLayer:
             specs.append((person, tid, did, conf, ppe, haz,
                           px, py, panel_w, panel_h))
 
-        # ── Semi-transparent light background ──────────────────────────
-        bg = self._blend_buf(frame)
-        for *_, px, py, pw, ph in specs:
-            cv2.rectangle(bg, (px, py), (px + pw, py + ph), _LIGHT_BG, -1)
-        cv2.addWeighted(bg, 0.75, frame, 0.25, 0, frame)
+        # Cache rendered specs for short track-loss re-renders.
+        self._last_specs = specs
+
+        # ── Background pass (cheap in degraded mode) ───────────────────
+        if degraded:
+            # Avoid alpha blending to reduce render cost while keeping
+            # the cards visible (prevents perceived PPE "disappearing").
+            for *_, px, py, pw, ph in specs:
+                cv2.rectangle(frame, (px, py), (px + pw, py + ph), _LIGHT_BG, -1)
+        else:
+            bg = self._blend_buf(frame)
+            for *_, px, py, pw, ph in specs:
+                cv2.rectangle(bg, (px, py), (px + pw, py + ph), _LIGHT_BG, -1)
+            cv2.addWeighted(bg, 0.75, frame, 0.25, 0, frame)
 
         # ── Per-panel rendering ────────────────────────────────────────
         for person, tid, did, conf, ppe, haz, px, py, pw, ph in specs:
@@ -329,7 +580,8 @@ class WorkerPanelLayer:
             ty += row_h
 
             # PPE items
-            for name, _, _ in _PPE_ITEMS:
+            for item in _PPE_ITEMS:
+                name = item["name"]
                 status = ppe.get(name)
                 if status is True:
                     mk, mc = "v", _GREEN_MK
@@ -360,3 +612,8 @@ class WorkerPanelLayer:
                     ty += row_h
 
         self._smoother.cleanup()
+        # Cleanup PPE cache for tracks that are no longer active.
+        for tid in list(self._ppe_state.keys()):
+            if tid not in active_tids:
+                self._ppe_state.pop(tid, None)
+                self._ppe_none_age.pop(tid, None)

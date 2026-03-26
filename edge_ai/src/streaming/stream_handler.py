@@ -1,7 +1,8 @@
 """
-StreamHandler — RTSP / file video reader with deque(maxlen=1) latest-frame policy.
+StreamHandler — RTSP / file video reader with source-aware buffering.
 
-Spawns a daemon thread that continuously decodes frames and drops stale ones.
+For live sources (RTSP/webcam): keep low-latency behaviour by dropping stale frames.
+For file sources: preserve frame order and avoid drops for stable playback/analytics.
 """
 import logging
 import threading
@@ -12,6 +13,7 @@ from typing import Optional
 import cv2
 
 from ..config.settings import (
+    LOOP_FILE_SOURCE,
     RTSP_MAX_RETRIES,
     RTSP_RETRY_BACKOFF,
     STREAM_BUFFER_SIZE,
@@ -26,8 +28,8 @@ class StreamHandler:
     """Captures frames from a video source using a background thread.
 
     Design contract:
-    - ``buffer`` is a ``deque(maxlen=1)`` — always holds only the newest frame.
-    - Old frames are *silently discarded* by the deque itself.
+    - ``buffer`` is a small ``deque(maxlen=N)``.
+    - Old frames are discarded when buffer is full.
     - ``dropped_count`` increments every time a new frame overwrites an unconsumed one.
     """
 
@@ -38,6 +40,8 @@ class StreamHandler:
         else:
             self.source: str | int = source
         self.camera_id: str = camera_id
+        self._is_file_source = self._detect_file_source(self.source)
+        self._loop_file_source = LOOP_FILE_SOURCE
 
         # Latest-frame buffer — the centrepiece of the architecture
         self.buffer: deque[FrameBundle] = deque(maxlen=STREAM_BUFFER_SIZE)
@@ -80,6 +84,7 @@ class StreamHandler:
         """Non-blocking pop of the latest frame (or ``None`` if empty)."""
         with self._buffer_lock:
             try:
+                # Latest-frame policy for both file and live sources.
                 return self.buffer.pop()
             except IndexError:
                 return None
@@ -87,6 +92,17 @@ class StreamHandler:
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @staticmethod
+    def _detect_file_source(source: str | int) -> bool:
+        if isinstance(source, int):
+            return False
+        s = source.strip().lower()
+        if s.startswith(("rtsp://", "http://", "https://", "rtmp://")):
+            return False
+        if s.isdigit():
+            return False
+        return True
 
     # ── internal ────────────────────────────────────────────────────
 
@@ -136,11 +152,18 @@ class StreamHandler:
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret:
-                    logger.warning(
-                        "Stream EOF or read failure — reconnecting  "
-                        "cam_id=%s  reconnect_attempt=%d",
-                        self.camera_id, self.reconnect_count,
-                    )
+                    if self._is_file_source and not self._loop_file_source:
+                        logger.info(
+                            "File source EOF reached — stopping stream  cam_id=%s",
+                            self.camera_id,
+                        )
+                        self._stop_event.set()
+                    else:
+                        logger.warning(
+                            "Stream EOF or read failure — reconnecting  "
+                            "cam_id=%s  reconnect_attempt=%d",
+                            self.camera_id, self.reconnect_count,
+                        )
                     break  # outer loop will re-open
 
                 now = time.monotonic()
@@ -158,12 +181,21 @@ class StreamHandler:
                     frame_number=self.total_frames_read,
                 )
 
-                with self._buffer_lock:
-                    # deque(maxlen=1): if buffer was full, the old frame is auto-evicted
-                    was_full = len(self.buffer) == self.buffer.maxlen
-                    self.buffer.append(bundle)
-                    if was_full:
-                        self.dropped_count += 1
+                # Source-aware enqueue policy:
+                # Always append; if buffer is full, deque(maxlen=N) drops the oldest.
+                enqueued = False
+                while not self._stop_event.is_set() and not enqueued:
+                    with self._buffer_lock:
+                        was_full = len(self.buffer) == self.buffer.maxlen
+                        self.buffer.append(bundle)
+                        if was_full:
+                            self.dropped_count += 1
+                        enqueued = True
+                    if not enqueued:
+                        time.sleep(0.001)
+
+                if self._stop_event.is_set() and not enqueued:
+                    break
 
                 self.total_frames_read += 1
                 local_count += 1

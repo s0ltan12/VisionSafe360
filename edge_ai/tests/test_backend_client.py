@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import numpy as np
+
 _EDGE_AI_DIR = Path(__file__).resolve().parents[1]
 if str(_EDGE_AI_DIR) not in sys.path:
 	sys.path.insert(0, str(_EDGE_AI_DIR))
@@ -94,3 +96,41 @@ def test_flush_queue_success_after_recovery(tmp_path: Path) -> None:
 	assert stats["flushed"] == 1
 	assert stats["remaining"] == 0
 	assert client.offline_queue_size() == 0
+
+
+def test_numpy_metadata_is_json_safe(tmp_path: Path) -> None:
+	db_path = tmp_path / "offline.db"
+	cfg = BackendClientConfig(
+		enabled=True,
+		base_url="http://localhost:8000",
+		incidents_path="/incidents",
+		auth_token="",
+		timeout_sec=0.01,
+		max_retry=0,
+		retry_backoff=(0.0,),
+		offline_db=db_path,
+		offline_queue_max_rows=100,
+	)
+
+	# Force backend failure to ensure payload passes through JSON offline enqueue.
+	session = _SessionStub([500])
+	client = BackendClient(config=cfg, session=session, sleep_fn=lambda _: None)
+
+	event = HazardEvent(
+		event_type="fall_confirmed",
+		severity=Severity.CRITICAL,
+		camera_id="cam_01",
+		timestamp=100.0,
+		frame_number=1,
+		track_id=7,
+		description="fall",
+		metadata={
+			"hip_ratio": np.float32(0.37),
+			"pose_points": np.array([1.0, 2.0], dtype=np.float32),
+			"track_raw": np.int64(7),
+		},
+	)
+
+	result = client.submit_incident(event)
+	assert result == BackendDeliveryResult.FAILED
+	assert client.offline_queue_size() == 1

@@ -21,6 +21,7 @@ import os as _os
 import signal
 import sys
 import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
@@ -49,7 +50,9 @@ from src.config.settings import (
     BACKEND_EVENTS_ENABLED,
     DEBUG_MODE,
     LOG_LEVEL,
+    OFFLINE_FLUSH_MAX_PER_CYCLE,
     OFFLINE_FLUSH_INTERVAL_SEC,
+    OFFLINE_SHUTDOWN_FLUSH_LIMIT,
     OUTPUT_DIR,
     PROXIMITY_HOLD_FRAMES,
     TARGET_INFER_FPS,
@@ -255,6 +258,8 @@ class PipelineContext:
     hazard_analyzer: Optional[HazardAnalyzer]
     posture_analyzer: Optional[PostureAnalyzer]
     proximity_analyzer: Optional[ProximityAnalyzer]
+    ppe_enabled: bool
+    person_tracker_source: str
 
     backend_client: BackendClient
     alert_manager: AlertManager
@@ -266,6 +271,7 @@ class PipelineContext:
     fall_every_n: int
     ergo_every_n: int
     proximity_every_n: int
+    ppe_every_n: int
 
     show: bool
     win_name: str
@@ -277,10 +283,14 @@ class PipelineContext:
     fps_t0: float
     inference_fps: float
     last_offline_flush: float
+    offline_flush_in_progress: bool
+    offline_flush_thread: Optional[threading.Thread]
 
     cumulative_forklift_dets: int
     sample_forklift_lines: list[str]
     sample_hazard_lines: list[str]
+    ppe_capable: bool
+    last_ppe_detections: list[Any]
 
     shutdown: bool = False
 
@@ -301,15 +311,29 @@ class FrameProcessor:
     def process(self, bundle) -> FrameResult:
         ctx = self._ctx
 
-        try:
-            pose_results, detections, det_latency = ctx.engine.run_pose_tracker(bundle)
-        except RuntimeError as exc:
-            if "out of memory" in str(exc).lower():
-                logger.critical("CUDA OOM during inference: %s", exc)
-                sys.exit(2)
-            raise
+        pose_latency = 0.0
+        if ctx.person_tracker_source == "ppe" and ctx.ppe_enabled:
+            try:
+                pose_results, pose_latency = ctx.engine.run_pose(bundle)
+                detections, det_latency = ctx.engine.run_ppe_person_tracker(bundle)
+            except RuntimeError as exc:
+                if "out of memory" in str(exc).lower():
+                    logger.critical("CUDA OOM during inference: %s", exc)
+                    sys.exit(2)
+                raise
+        else:
+            try:
+                pose_results, detections, det_latency = ctx.engine.run_pose_tracker(bundle)
+                pose_latency = det_latency
+            except RuntimeError as exc:
+                if "out of memory" in str(exc).lower():
+                    logger.critical("CUDA OOM during inference: %s", exc)
+                    sys.exit(2)
+                raise
         prox_detections: list[Any] = []
         prox_latency = 0.0
+        ppe_detections: list[Any] = []
+        ppe_latency = 0.0
         raw_prox_detections: list[Any] = []
         raw_forklift_dets = 0
         forklift_dets = 0
@@ -335,7 +359,15 @@ class FrameProcessor:
 
             detections.extend([d for d in prox_detections if d.class_name == "forklift"])
 
+        if ctx.ppe_enabled:
+            if ctx.frame_counter % ctx.ppe_every_n == 0:
+                ppe_detections, ppe_latency = ctx.engine.run_ppe(bundle)
+                ctx.last_ppe_detections = ppe_detections
+            else:
+                ppe_detections = ctx.last_ppe_detections
+
         detections = ctx.det_smoother.smooth(detections)
+        render_detections = detections + ppe_detections
 
         n_tracked = sum(1 for d in detections if d.track_id is not None)
         track_metrics = ctx.track_monitor.update(detections, time.time())
@@ -400,10 +432,30 @@ class FrameProcessor:
             BACKEND_EVENTS_ENABLED
             and (time.monotonic() - ctx.last_offline_flush) >= OFFLINE_FLUSH_INTERVAL_SEC
         ):
-            flush_stats = ctx.backend_client.flush_offline_queue()
-            delivery_metrics["offline_queue_size"] = flush_stats.get(
-                "remaining", ctx.backend_client.offline_queue_size()
-            )
+            flush_limit = max(0, int(OFFLINE_FLUSH_MAX_PER_CYCLE))
+            # Important: avoid blocking the main video loop with HTTP requests.
+            if flush_limit > 0:
+                delivery_metrics["offline_queue_size"] = ctx.backend_client.offline_queue_size()
+                if not ctx.offline_flush_in_progress:
+                    ctx.offline_flush_in_progress = True
+
+                    def _offline_flush_worker() -> None:
+                        try:
+                            ctx.backend_client.flush_offline_queue(limit=flush_limit)
+                        except Exception:
+                            logger.exception("offline flush worker failed")
+                        finally:
+                            ctx.offline_flush_in_progress = False
+
+                    ctx.offline_flush_thread = threading.Thread(
+                        target=_offline_flush_worker,
+                        name=f"offline-flush-{ctx.stream.camera_id}",
+                        daemon=True,
+                    )
+                    ctx.offline_flush_thread.start()
+            else:
+                # Explicitly disabled: report current queue size.
+                delivery_metrics["offline_queue_size"] = ctx.backend_client.offline_queue_size()
             ctx.last_offline_flush = time.monotonic()
 
         ctx.frames_processed += 1
@@ -419,7 +471,7 @@ class FrameProcessor:
             frame_no=bundle.frame_number,
             input_fps=ctx.stream.input_fps,
             inference_fps=ctx.inference_fps,
-            inference_ms=round(det_latency + prox_latency, 2),
+            inference_ms=round(det_latency + prox_latency + ppe_latency + pose_latency, 2),
             n_detections=len(detections),
             n_tracked=n_tracked,
             dropped_frames=ctx.stream.dropped_count,
@@ -428,7 +480,7 @@ class FrameProcessor:
             hazard_types=hazard_types if hazard_types else [],
             forklift_dets=forklift_dets,
             raw_forklift_dets=raw_forklift_dets,
-            pose_ms=round(det_latency, 1),
+            pose_ms=round(pose_latency, 1),
             track_coverage=track_metrics.get("track_coverage", 0.0),
             calibrated=ctx.is_calibrated,
             n_events_emitted=delivery_metrics.get("n_events_emitted", 0),
@@ -475,20 +527,20 @@ class FrameProcessor:
         annotated = bundle.frame.copy()
         ctx.renderer.render(
             annotated,
-            detections=detections,
+            detections=render_detections,
             pose_results=pose_results,
             hazard_events=emitted_events,
             display_id_map=display_id_map,
             calibrated=ctx.is_calibrated,
             fps=ctx.inference_fps,
-            latency_ms=det_latency + prox_latency,
+            latency_ms=det_latency + prox_latency + ppe_latency + pose_latency,
             n_det=len(detections),
             n_tracked=n_tracked,
             vram_mb=ctx.engine.vram_used_mb(),
             n_hazards=len(emitted_events),
             pose_ms=0.0,
             track_coverage=track_metrics.get("track_coverage", 0.0),
-            ppe_capable=False,
+            ppe_capable=ctx.ppe_capable,
             now=ts_now,
         )
 
@@ -518,6 +570,18 @@ def _build_pipeline_context(
             )
             proximity_enabled = False
 
+    ppe_enabled = profile.is_enabled("ppe_analyzer")
+    ppe_capable = False
+    if ppe_enabled:
+        ppe_weights = profile.get_weights("ppe_analyzer")
+        if not engine.load_ppe(ppe_weights):
+            logger.warning(
+                "PPE analyzer enabled in profile but model was not loaded"
+            )
+            ppe_enabled = False
+        else:
+            ppe_capable = True
+
     is_calibrated = calibration_mgr.is_calibrated(cam_id)
 
     ui_settings = load_ui_settings_from_profile(profile.ui_config)
@@ -544,6 +608,13 @@ def _build_pipeline_context(
     fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
     ergo_every_n = profile.get_schedule("posture_analyzer")
     proximity_every_n = profile.get_schedule("proximity_analyzer")
+    ppe_every_n = profile.get_schedule("ppe_analyzer")
+    person_tracker_source = profile.person_tracker_source
+    if person_tracker_source == "ppe" and not ppe_enabled:
+        logger.warning(
+            "person_tracker_source=ppe but ppe_analyzer is disabled; falling back to pose"
+        )
+        person_tracker_source = "pose"
 
     stream.start()
     logger.info(
@@ -577,6 +648,8 @@ def _build_pipeline_context(
         hazard_analyzer=hazard_analyzer,
         posture_analyzer=posture_analyzer,
         proximity_analyzer=proximity_analyzer,
+        ppe_enabled=ppe_enabled,
+        person_tracker_source=person_tracker_source,
         backend_client=backend_client,
         alert_manager=alert_manager,
         siren_controller=siren_controller,
@@ -585,6 +658,7 @@ def _build_pipeline_context(
         fall_every_n=fall_every_n,
         ergo_every_n=ergo_every_n,
         proximity_every_n=proximity_every_n,
+        ppe_every_n=ppe_every_n,
         show=show,
         win_name=win_name,
         writer=writer,
@@ -594,9 +668,13 @@ def _build_pipeline_context(
         fps_t0=time.monotonic(),
         inference_fps=0.0,
         last_offline_flush=time.monotonic(),
+        offline_flush_in_progress=False,
+        offline_flush_thread=None,
         cumulative_forklift_dets=0,
         sample_forklift_lines=[],
         sample_hazard_lines=[],
+        ppe_capable=ppe_capable,
+        last_ppe_detections=[],
     )
 
 
@@ -606,7 +684,9 @@ def _shutdown_pipeline(ctx: PipelineContext) -> None:
     except Exception:
         pass
     try:
-        ctx.backend_client.flush_offline_queue()
+        flush_limit = max(0, int(OFFLINE_SHUTDOWN_FLUSH_LIMIT))
+        if flush_limit > 0:
+            ctx.backend_client.flush_offline_queue(limit=flush_limit)
     except Exception:
         pass
     try:
@@ -614,6 +694,13 @@ def _shutdown_pipeline(ctx: PipelineContext) -> None:
     except Exception:
         pass
     ctx.stream.stop()
+    # Best-effort wait for background offline flush (avoid exiting mid-write).
+    try:
+        t = ctx.offline_flush_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=2.0)
+    except Exception:
+        pass
     if ctx.writer is not None:
         ctx.writer.release()
     if ctx.show:
@@ -671,7 +758,10 @@ def run_pipeline(source: str | int, cam_id: str, show: bool, profile: ProfileCon
             if ctx.show:
                 cv2.imshow(ctx.win_name, result.annotated)
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
+                # Only quit on explicit `q`.
+                # Some environments may report `ESC` implicitly; using `q` only
+                # prevents accidental early termination.
+                if key == ord("q"):
                     logger.info("User pressed quit key")
                     break
             else:

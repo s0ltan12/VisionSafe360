@@ -39,7 +39,8 @@ class UISettings:
     max_worker_panels:    int  = 8        # cap panels shown per frame
     # anchor mode: "left_of_bbox" | "top_left" | "auto_avoid_overlap"
     panel_anchor_mode:   str  = "auto_avoid_overlap"
-    panel_width:          int  = 168
+    # Width of the worker panels in pixels (cards close to person, readable).
+    panel_width:          int  = 140
     panel_min_height:     int  = 88
 
     # ── Hazards layer ─────────────────────────────────────────────────

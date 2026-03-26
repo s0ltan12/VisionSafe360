@@ -30,6 +30,11 @@ from ..settings import (
     PROXIMITY_IOU_THRESHOLD,
     PROXIMITY_MAX_DET,
     PROXIMITY_WEIGHTS,
+    PPE_CONF_THRESHOLD,
+    PPE_FALLBACK_WEIGHTS,
+    PPE_IOU_THRESHOLD,
+    PPE_MAX_DET,
+    PPE_WEIGHTS,
 )
 from ...models.detection import Detection
 from ...models.frame_bundle import FrameBundle
@@ -79,6 +84,9 @@ class InferenceEngine:
         self._proximity_model = None
         self._proximity_loaded = False
         self._proximity_names = {}
+        self._ppe_model = None
+        self._ppe_loaded = False
+        self._ppe_names = {}
 
         # Resolve actual device
         import torch
@@ -171,6 +179,63 @@ class InferenceEngine:
             self._proximity_model = None
             self._proximity_names = {}
             self._proximity_loaded = False
+            return False
+
+    def load_ppe(self, profile_weights: str = "") -> bool:
+        """Load optional PPE detector.
+
+        Supports profile override path, then falls back to PPE_WEIGHTS and
+        PPE_FALLBACK_WEIGHTS.
+        """
+        from ultralytics import YOLO
+
+        candidate: Path | None = None
+        source_label = ""
+        if profile_weights and profile_weights.strip():
+            pw = Path(profile_weights.strip())
+            if not pw.is_absolute():
+                pw = BASE_DIR / pw
+            if pw.exists():
+                candidate = pw
+                source_label = f"profile({profile_weights.strip()})"
+
+        if candidate is None and PPE_WEIGHTS.exists():
+            candidate = PPE_WEIGHTS
+            source_label = "primary(yolo9e.pt)"
+        if candidate is None and PPE_FALLBACK_WEIGHTS.exists():
+            candidate = PPE_FALLBACK_WEIGHTS
+            source_label = "fallback(best_ppe.pt)"
+
+        if candidate is None:
+            logger.warning(
+                "PPE model disabled: no weights found at %s or %s",
+                PPE_WEIGHTS,
+                PPE_FALLBACK_WEIGHTS,
+            )
+            return False
+
+        try:
+            rel = os.path.relpath(candidate)
+            weights = rel if os.path.exists(rel) else str(candidate)
+        except ValueError:
+            weights = str(candidate)
+        logger.info("Loading PPE model from %s: %s", source_label, weights)
+
+        try:
+            self._ppe_model = YOLO(weights)
+            self._ppe_names = {
+                int(k): str(v).strip().lower()
+                for k, v in getattr(self._ppe_model, "names", {}).items()
+            }
+            self._ppe_loaded = True
+            logger.info("PPE model ready: %s", source_label)
+            logger.info("PPE classes available: %s", list(self._ppe_names.values()))
+            return True
+        except Exception as exc:
+            logger.error("Failed to load PPE model: %s", exc)
+            self._ppe_model = None
+            self._ppe_names = {}
+            self._ppe_loaded = False
             return False
 
     # ── Inference ───────────────────────────────────────────────────
@@ -273,6 +338,126 @@ class InferenceEngine:
                         int(box.xyxy[0][2]), int(box.xyxy[0][3]),
                     ),
                     track_id=None,
+                ))
+
+        return detections, latency_ms
+
+    def run_ppe(self, bundle: FrameBundle) -> Tuple[List[Detection], float]:
+        """Run optional PPE detector and normalize relevant classes for UI panels."""
+        if not self._ppe_loaded:
+            return [], 0.0
+
+        t0 = time.perf_counter()
+        results = self._ppe_model.predict(
+            bundle.frame,
+            device=self.device,
+            half=self._use_half,
+            imgsz=IMGSZ,
+            conf=PPE_CONF_THRESHOLD,
+            iou=PPE_IOU_THRESHOLD,
+            max_det=PPE_MAX_DET,
+            verbose=False,
+        )[0]
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        detections: List[Detection] = []
+        if results.boxes is not None and len(results.boxes):
+            for box in results.boxes:
+                cid = int(box.cls[0])
+                cname = self._ppe_names.get(cid, str(cid)).lower()
+                norm = cname.replace("-", "_").replace(" ", "_")
+
+                # Normalize SH17-style classes to panel-friendly names.
+                if norm in {"helmet", "hardhat", "hard_hat", "helmet_on"}:
+                    mapped = "helmet_on"
+                elif norm in {"head", "helmet_off", "no_helmet", "bare_head"}:
+                    mapped = "helmet_off"
+                elif norm in {"gloves", "glove", "gloves_on"}:
+                    mapped = "gloves_on"
+                elif norm in {"hands", "hand", "bare_hands", "no_gloves", "gloves_off"}:
+                    mapped = "gloves_off"
+                elif norm in {"glasses", "goggles", "eye_protection"}:
+                    mapped = "glasses"
+                elif norm in {"face_mask", "face-mask", "mask"}:
+                    mapped = "face_mask"
+                elif norm in {"face_guard", "face-guard", "shield"}:
+                    mapped = "face_guard"
+                elif norm in {"ear_mufs", "ear_muffs", "hearing_protection"}:
+                    mapped = "ear_muffs"
+                elif norm in {"ear"}:
+                    mapped = "ear"
+                elif norm in {"face"}:
+                    mapped = "face"
+                elif norm in {"safety_vest", "safety-vest", "vest", "vest_on"}:
+                    mapped = "safety_vest"
+                elif norm in {"vest_off", "no_vest"}:
+                    mapped = "vest_off"
+                elif norm in {"safety_suit", "coverall", "coveralls"}:
+                    mapped = "safety_suit"
+                elif norm in {"medical_suit", "hazmat"}:
+                    mapped = "medical_suit"
+                elif norm in {"shoes", "boots", "safety_shoes"}:
+                    mapped = "shoes"
+                elif norm in {"foot", "bare_foot"}:
+                    mapped = "bare_foot"
+                elif norm in {"tool"}:
+                    mapped = "tool"
+                else:
+                    continue
+
+                detections.append(Detection(
+                    class_id=cid,
+                    class_name=mapped,
+                    confidence=float(box.conf[0]),
+                    bbox=(
+                        int(box.xyxy[0][0]), int(box.xyxy[0][1]),
+                        int(box.xyxy[0][2]), int(box.xyxy[0][3]),
+                    ),
+                    track_id=None,
+                ))
+
+        return detections, latency_ms
+
+    def run_ppe_person_tracker(self, bundle: FrameBundle) -> Tuple[List[Detection], float]:
+        """Track persons using PPE model (SH17) with ByteTrack for robust IDs."""
+        if not self._ppe_loaded:
+            return [], 0.0
+
+        t0 = time.perf_counter()
+        tracker_cfg = str(_CUSTOM_TRACKER_CFG) if _CUSTOM_TRACKER_CFG.exists() else "bytetrack.yaml"
+        results = self._ppe_model.track(
+            bundle.frame,
+            device=self.device,
+            half=self._use_half,
+            imgsz=IMGSZ,
+            conf=PPE_CONF_THRESHOLD,
+            iou=PPE_IOU_THRESHOLD,
+            max_det=PPE_MAX_DET,
+            tracker=tracker_cfg,
+            persist=True,
+            verbose=False,
+        )[0]
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        detections: List[Detection] = []
+        if results.boxes is not None and len(results.boxes):
+            for box in results.boxes:
+                cid = int(box.cls[0])
+                cname = self._ppe_names.get(cid, str(cid)).lower()
+                norm = cname.replace("-", "_").replace(" ", "_")
+                if norm != "person":
+                    continue
+
+                tid = int(box.id[0]) if box.id is not None else None
+                detections.append(Detection(
+                    class_id=cid,
+                    class_name="person",
+                    confidence=float(box.conf[0]),
+                    bbox=(
+                        int(box.xyxy[0][0]), int(box.xyxy[0][1]),
+                        int(box.xyxy[0][2]), int(box.xyxy[0][3]),
+                    ),
+                    track_id=tid,
                 ))
 
         return detections, latency_ms
