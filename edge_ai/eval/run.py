@@ -155,9 +155,9 @@ def evaluate_clip(
 
         loop_start = time.monotonic()
 
-        # ── Detector + ByteTrack ────────────────────────────────────
+        # ── Pose + Detection via pose_tracker ───────────────────────────
         try:
-            detections, det_latency = engine.run_tracker(bundle)
+            pose_results, detections, det_latency = engine.run_pose_tracker(bundle)
         except RuntimeError as exc:
             if "out of memory" in str(exc).lower():
                 logger.critical("CUDA OOM: %s", exc)
@@ -171,14 +171,9 @@ def evaluate_clip(
         track_metrics = track_monitor.update(detections, time.time())
         display_id_map = track_monitor.remap_detections_display_ids(detections)
 
-        # ── Pose ────────────────────────────────────────────────────
-        pose_results = None
+        # ── Pose (already retrieved from pose_tracker) ─────────────────
         pose_latency = 0.0
-        if pose_enabled and frame_counter % pose_every_n == 0:
-            try:
-                pose_results, pose_latency = engine.run_pose(bundle)
-            except RuntimeError:
-                pass
+        # pose_results already populated from run_pose_tracker above
 
         # ── Hazard analysis ─────────────────────────────────────────
         hazard_events = []
@@ -320,22 +315,54 @@ def run_evaluation(clip_paths: List[str], profile_name: str, save_video: bool = 
 
     # ── Shared engine (one GPU allocation) ──────────────────────────
     engine = InferenceEngine()
-    engine.load_detector()
-
-    cap_report = check_model_capabilities(
-        engine.class_names,
-        ppe_enabled=profile.is_sub_enabled("hazard_analyzer", "ppe"),
-        proximity_enabled=profile.is_sub_enabled("hazard_analyzer", "proximity"),
-        fall_enabled=profile.is_sub_enabled("hazard_analyzer", "fall"),
-    )
-    cap_report.log_report()
-
+    
+    # Load pose model (provides person detection + keypoints)
     pose_enabled = profile.is_enabled("pose")
     if pose_enabled:
         try:
+            pose_weights = profile.get_weights("pose") if hasattr(profile, "get_weights") else ""
             engine.load_pose()
+            logger.info("Pose model loaded")
         except Exception as exc:
             logger.warning("Pose model load failed: %s", exc)
+            pose_enabled = False
+    
+    # Load proximity model if enabled
+    proximity_enabled = profile.is_sub_enabled("hazard_analyzer", "proximity")
+    if proximity_enabled:
+        try:
+            prox_weights = profile.get_weights("proximity_analyzer") if hasattr(profile, "get_weights") else ""
+            if engine.load_proximity(prox_weights):
+                logger.info("Proximity model loaded")
+            else:
+                logger.warning("Proximity model not loaded")
+                proximity_enabled = False
+        except Exception as exc:
+            logger.warning("Proximity model load failed: %s", exc)
+            proximity_enabled = False
+    
+    # Load PPE model if enabled
+    ppe_enabled = profile.is_sub_enabled("hazard_analyzer", "ppe")
+    if ppe_enabled:
+        try:
+            ppe_weights = profile.get_weights("ppe_analyzer") if hasattr(profile, "get_weights") else ""
+            if engine.load_ppe(ppe_weights):
+                logger.info("PPE model loaded")
+            else:
+                logger.warning("PPE model not loaded")
+                ppe_enabled = False
+        except Exception as exc:
+            logger.warning("PPE model load failed: %s", exc)
+            ppe_enabled = False
+    
+    # Capability report
+    cap_report = check_model_capabilities(
+        pose_enabled=pose_enabled,
+        ppe_enabled=ppe_enabled,
+        proximity_enabled=proximity_enabled,
+        fall_enabled=profile.is_sub_enabled("hazard_analyzer", "fall"),
+    )
+    cap_report.log_report()
 
     # ── Evaluate each clip ──────────────────────────────────────────
     clip_reports: List[Dict[str, Any]] = []

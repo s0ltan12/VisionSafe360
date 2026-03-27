@@ -64,9 +64,9 @@ POSE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "yolov8n-pose.pt"
 PROXIMITY_WEIGHTS = BASE_DIR / "weights" / "forklift" / "best_forklift.pt"
 PROXIMITY_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "forklift" / "yolov8n.pt"
 
-# --- Optional PPE detector (SH17 model)
-PPE_WEIGHTS = BASE_DIR / "SH17dataset-master" / "yolo9e.pt"
-PPE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "ppe" / "best_ppe.pt"
+# --- Optional PPE detector (SH17 trained model)
+PPE_WEIGHTS = BASE_DIR / "weights" / "ppe" / "best_ppe.pt"
+PPE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "ppe" / "yolov8n.pt"
 
 # --- Inference parameters
 IMGSZ = 640  # DO NOT increase - each +64px ~ +15% VRAM

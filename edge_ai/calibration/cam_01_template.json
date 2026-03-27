@@ -1,0 +1,15 @@
+{
+  "camera_id": "cam_01",
+  "description": "Example calibration file - replace with actual values",
+  "validated": false,
+  "homography_matrix": [
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0]
+  ],
+  "ground_plane": {
+    "origin_px": [320, 480],
+    "scale_m_per_px": 0.01
+  },
+  "notes": "Identity matrix - no perspective transform. Update with cv2.findHomography() results."
+}
