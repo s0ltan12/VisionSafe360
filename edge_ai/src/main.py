@@ -977,6 +977,12 @@ def run_multi_camera_pipeline(
         cameras.append(cam_ctx)
         logger.info("  Camera %s: %s", cam_id, source)
     
+    # ── Start all camera streams ────────────────────────────────────
+    for cam in cameras:
+        cam.stream.start()
+        if show:
+            cv2.namedWindow(cam.win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    
     # ── Scheduling ──────────────────────────────────────────────────
     fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
     ergo_every_n = profile.get_schedule("posture_analyzer")
@@ -997,6 +1003,9 @@ def run_multi_camera_pipeline(
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     
+    # Wait briefly for streams to start capturing
+    time.sleep(0.5)
+    
     logger.info("═══ Pipeline running (press 'q' to quit) ═══")
     
     try:
@@ -1016,6 +1025,10 @@ def run_multi_camera_pipeline(
                 any_frame_processed = True
                 cam.frame_counter += 1
                 
+                # Log progress every 30 frames
+                if cam.frame_counter % 30 == 0:
+                    logger.info("  %s: %d frames processed", cam.cam_id, cam.frame_counter)
+                
                 # ── Inference (shared engine) ───────────────────────
                 try:
                     pose_results, detections, det_latency = engine.run_pose_tracker(bundle)
@@ -1031,7 +1044,7 @@ def run_multi_camera_pipeline(
                 prox_latency = 0.0
                 if proximity_enabled and cam.frame_counter % proximity_every_n == 0:
                     prox_detections, prox_latency = engine.run_proximity(bundle)
-                    prox_detections = cam.forklift_smoother.smooth(prox_detections, bundle.frame_number)
+                    prox_detections, _ = cam.forklift_smoother.smooth(prox_detections)
                     detections.extend([d for d in prox_detections if d.class_name == "forklift"])
                 
                 # ── PPE detection ───────────────────────────────────
@@ -1074,13 +1087,14 @@ def run_multi_camera_pipeline(
                 
                 # ── Proximity analysis ──────────────────────────────
                 if cam.proximity_analyzer is not None and prox_detections:
+                    # Merge forklift detections into main detections for analysis
+                    all_detections = detections + [d for d in prox_detections if d.class_name == "forklift"]
                     hazard_events.extend(cam.proximity_analyzer.analyze(
-                        detections=detections,
-                        forklift_detections=prox_detections,
+                        detections=all_detections,
+                        tracked_pose_people=detections,
                         camera_id=cam.cam_id,
                         frame_number=cam.frame_counter,
                         timestamp=ts_now,
-                        calibrated=cam.is_calibrated,
                     ))
                 
                 # ── Event aggregation & alerting ────────────────────
@@ -1130,6 +1144,16 @@ def run_multi_camera_pipeline(
             if BACKEND_EVENTS_ENABLED and (time.monotonic() - last_offline_flush) >= OFFLINE_FLUSH_INTERVAL_SEC:
                 backend_client.flush_offline_queue(limit=OFFLINE_FLUSH_MAX_PER_CYCLE)
                 last_offline_flush = time.monotonic()
+            
+            # ── Check if all streams finished ───────────────────────
+            all_streams_done = all(not cam.stream.is_running for cam in cameras)
+            if all_streams_done and not any_frame_processed:
+                # Give one more chance to read remaining buffered frames
+                time.sleep(0.1)
+                still_have_frames = any(cam.stream.get_frame() is not None for cam in cameras)
+                if not still_have_frames:
+                    logger.info("All camera streams finished")
+                    global_shutdown = True
             
             # ── Key handling ────────────────────────────────────────
             if show:
