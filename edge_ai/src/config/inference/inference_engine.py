@@ -22,6 +22,7 @@ from ..settings import (
     INFERENCE_DEVICE,
     IOU_THRESHOLD,
     MAX_DET,
+    PRECISION,
     POSE_FALLBACK_WEIGHTS,
     POSE_WEIGHTS,
     PROXIMITY_CONF_THRESHOLD,
@@ -92,8 +93,12 @@ class InferenceEngine:
         import torch
         if "cuda" in INFERENCE_DEVICE and torch.cuda.is_available():
             self.device = INFERENCE_DEVICE
-            self._use_half = True
-            logger.info("CUDA available — using %s with FP16", self.device)
+            self._use_half = PRECISION.lower() == "fp16"
+            logger.info(
+                "CUDA available — using %s with %s",
+                self.device,
+                "FP16" if self._use_half else "FP32",
+            )
         else:
             self.device = "cpu"
             self._use_half = False

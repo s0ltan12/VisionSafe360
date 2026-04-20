@@ -51,7 +51,16 @@ class UISettings:
     # ── Banner layer ──────────────────────────────────────────────────
     banner_critical_sec: float = 2.5     # total banner visible duration (s)
     banner_fade_sec:     float = 0.6     # fade-out duration within that window
-    banner_max:           int  = 3       # max simultaneous banners
+    banner_max:           int  = 1       # max simultaneous banners (less intrusive)
+    banner_enter_sec:    float = 0.40    # entrance motion duration (s)
+    banner_stack_gap:     int  = 6       # vertical spacing between notification cards
+    banner_corner_radius: int  = 16      # rounded card radius
+    banner_side_margin:   int  = 16      # left/right outer margin
+    banner_top_margin:    int  = 12      # top outer margin
+    banner_shadow_px:      int  = 6      # soft shadow offset for depth
+    banner_glow_strength: float = 0.08   # subtle severity glow alpha
+    banner_repeat_cooldown_sec: float = 4.0  # suppress duplicate notifications
+    banner_include_worker_id: bool = True    # include worker ID in notification body
 
     # ── Adaptive performance degradation ─────────────────────────────
     perf_budget_ms:      float = 12.0    # target maximum UI cost per frame

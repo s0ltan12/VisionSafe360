@@ -1,0 +1,99 @@
+<svg viewBox="0 0 200 250" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="vs-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0.8 0" result="glow" />
+      <feComposite in="SourceGraphic" in2="glow" operator="over" />
+    </filter>
+    <linearGradient id="vs-orangeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF6A00" />
+      <stop offset="100%" stop-color="#FF8C32" />
+    </linearGradient>
+    <style>
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      .spin-slow { 
+        animation: spin 12s linear infinite; 
+        transform-origin: 100px 100px; 
+      }
+      .spin-reverse { 
+        animation: spin 8s linear infinite reverse; 
+        transform-origin: 100px 100px; 
+      }
+      .vs-font { 
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+        font-weight: 700; 
+      }
+    </style>
+  </defs>
+
+  <!-- --- Symbol Group --- -->
+  <g>
+    <path
+      d="M100 10 A 90 90 0 1 1 100 190 A 90 90 0 1 1 100 10"
+      stroke="url(#vs-orangeGradient)"
+      stroke-width="3"
+      stroke-linecap="round"
+      fill="none"
+      stroke-dasharray="100 41.3"
+      class="spin-slow"
+      opacity="0.9"
+    />
+    
+    <path
+      d="M100 22 A 78 78 0 1 1 100 178 A 78 78 0 1 1 100 22"
+      stroke="#FF6A00"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      fill="none"
+      stroke-dasharray="35 26.25" 
+      class="spin-reverse"
+      opacity="0.6"
+    />
+
+    <!-- Shield -->
+    <path
+      d="M100 35 L145 55 V95 C145 125 125 150 100 165 C75 150 55 125 55 95 V55 L100 35 Z"
+      stroke="#FF6A00"
+      stroke-width="3"
+      fill="#0A0A0A"
+      filter="url(#vs-glow)"
+    />
+
+    <!-- Eye -->
+    <path
+      d="M70 100 C70 100 85 85 100 85 C115 85 130 100 130 100 C130 100 115 115 100 115 C85 115 70 100 70 100 Z"
+      stroke="#FF6A00"
+      stroke-width="2"
+      fill="none"
+    />
+
+    <!-- Eye Pupil Pulse Animation -->
+    <circle cx="100" cy="100" r="12" fill="#FF6A00" opacity="0.2">
+       <animate attributeName="r" values="10;14;10" dur="2s" repeatCount="indefinite" />
+       <animate attributeName="opacity" values="0.2;0.5;0.2" dur="2s" repeatCount="indefinite" />
+    </circle>
+    <circle cx="100" cy="100" r="6" fill="#FF8C32">
+       <animate attributeName="r" values="5;7;5" dur="2s" repeatCount="indefinite" />
+    </circle>
+    
+    <!-- Tech Details -->
+    <path d="M100 35 V45" stroke="#FF6A00" stroke-width="1" />
+    <path d="M100 155 V165" stroke="#FF6A00" stroke-width="1" />
+  </g>
+
+  <!-- --- Text Group --- -->
+  <text 
+    x="100" 
+    y="235" 
+    text-anchor="middle" 
+    fill="#FFFFFF"
+    font-size="24"
+    class="vs-font"
+    letter-spacing="0.5"
+  >
+    VISIONSAFE <tspan fill="#FF6A00">360</tspan>
+  </text>
+</svg>

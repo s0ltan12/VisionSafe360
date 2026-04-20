@@ -20,6 +20,8 @@ from ..config.settings import (
     FALL_HIP_RATIO_THRESHOLD,
     FALL_HIP_RECOVERY_THRESHOLD,
     FALL_IMMOBILITY_THRESHOLD,
+    FALL_SEATED_GUARD_AR_SPREAD,
+    FALL_SEATED_GUARD_DY,
     FALL_TRACK_PURGE_SEC,
     FALL_VELOCITY_THRESHOLD,
     FALL_VELOCITY_WINDOW,
@@ -220,6 +222,7 @@ class HazardAnalyzer:
             st.centroid_history.append(centroid)
             st.aspect_ratio_history.append(aspect_ratio)
             st.area_history.append(area)
+            prev_hip_ratio = st.last_hip_ratio
 
             # ── Compute hip_ratio from pose keypoints ───────────────
             hip_ratio = None
@@ -237,6 +240,20 @@ class HazardAnalyzer:
             if st.state == "normal":
                 triggered = False
 
+                recent_ratios = list(st.aspect_ratio_history)[-5:]
+                ar_spread = (max(recent_ratios) - min(recent_ratios)) if len(recent_ratios) >= 2 else 1.0
+                recent_centroids = list(st.centroid_history)[-5:]
+                dy_recent = (
+                    recent_centroids[-1][1] - recent_centroids[0][1]
+                    if len(recent_centroids) >= 2
+                    else FALL_SEATED_GUARD_DY + 1.0
+                )
+                seated_like_low_posture = (
+                    aspect_ratio > FALL_ASPECT_RATIO_THRESHOLD
+                    and abs(dy_recent) <= FALL_SEATED_GUARD_DY
+                    and ar_spread <= FALL_SEATED_GUARD_AR_SPREAD
+                )
+
                 # Condition 1: aspect ratio (lowered from 1.0 to 0.85 per fd/ model)
                 if (len(st.aspect_ratio_history) >= 3
                         and aspect_ratio > FALL_ASPECT_RATIO_THRESHOLD):
@@ -248,8 +265,12 @@ class HazardAnalyzer:
                 # Condition 2: hip_ratio from pose (NEW from fd/ project)
                 if hip_ratio is not None and hip_ratio < FALL_HIP_RATIO_THRESHOLD:
                     prev_ratios = list(st.aspect_ratio_history)[:-1]
-                    was_upright = any(r < 0.8 for r in prev_ratios[-3:]) if len(prev_ratios) >= 1 else True
-                    if was_upright:
+                    was_upright = any(r < 0.8 for r in prev_ratios[-3:]) if len(prev_ratios) >= 2 else False
+                    hip_drop_is_sudden = (
+                        prev_hip_ratio is not None
+                        and (prev_hip_ratio - hip_ratio) >= 0.08
+                    )
+                    if (was_upright or hip_drop_is_sudden) and not seated_like_low_posture:
                         triggered = True
 
                 # Condition 3: rapid downward velocity (kept as secondary)

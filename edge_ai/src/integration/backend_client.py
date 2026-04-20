@@ -38,6 +38,7 @@ class BackendClientConfig:
 	base_url: str = settings.BACKEND_URL
 	incidents_path: str = settings.BACKEND_INCIDENTS_PATH
 	auth_token: str = settings.BACKEND_AUTH_TOKEN
+	source_id: str = settings.BACKEND_SOURCE_ID
 	timeout_sec: float = settings.BACKEND_TIMEOUT
 	max_retry: int = settings.BACKEND_MAX_RETRY
 	retry_backoff: tuple[float, ...] = tuple(settings.BACKEND_RETRY_BACKOFF)
@@ -140,9 +141,14 @@ class BackendClient:
 
 		ok, error = self._post_with_retry(payload)
 		if ok:
+			logger.info("incident delivered", extra={"event": "incident_delivered", "source_id": self.config.source_id or "unknown"})
 			return DeliveryResult.OK
 
 		self._enqueue_offline(payload, error or "unknown_error")
+		logger.warning(
+			"incident delivery failed, queued offline",
+			extra={"event": "incident_delivery_failed", "source_id": self.config.source_id or "unknown", "error": error or "unknown_error"},
+		)
 		return DeliveryResult.FAILED
 
 	def submit_incident_fast(self, event: HazardEvent) -> DeliveryResult:
@@ -165,9 +171,14 @@ class BackendClient:
 
 		ok, error = self._post_once(payload)
 		if ok:
+			logger.info("incident delivered", extra={"event": "incident_delivered", "source_id": self.config.source_id or "unknown"})
 			return DeliveryResult.OK
 
 		self._enqueue_offline(payload, error or "unknown_error")
+		logger.warning(
+			"incident delivery failed, queued offline",
+			extra={"event": "incident_delivery_failed", "source_id": self.config.source_id or "unknown", "error": error or "unknown_error"},
+		)
 		return DeliveryResult.FAILED
 
 	def submit_batch(self, events: list[HazardEvent]) -> tuple[int, int]:
@@ -257,6 +268,8 @@ class BackendClient:
 		headers = {"Content-Type": "application/json"}
 		if self.config.auth_token:
 			headers["Authorization"] = f"Bearer {self.config.auth_token}"
+		if self.config.source_id:
+			headers["X-Source-Id"] = self.config.source_id
 
 		try:
 			response = self._session.post(
@@ -302,6 +315,8 @@ class BackendClient:
 		headers = {"Content-Type": "application/json"}
 		if self.config.auth_token:
 			headers["Authorization"] = f"Bearer {self.config.auth_token}"
+		if self.config.source_id:
+			headers["X-Source-Id"] = self.config.source_id
 
 		last_error: Optional[str] = None
 		for attempt in range(attempts):
@@ -390,17 +405,36 @@ class BackendClient:
 
 	@staticmethod
 	def _event_to_payload(event: HazardEvent) -> dict:
-		# Convert HazardEvent to backend incident payload.
+		# Convert HazardEvent to backend IncidentCreate schema.
+		severity_map = {
+			"CRITICAL": "High",
+			"HIGH": "High",
+			"MEDIUM": "Medium",
+			"LOW": "Low",
+		}
+		severity = severity_map.get(str(event.severity.name).upper(), "Medium")
+		classification = str(event.event_type or "Hazard").replace("_", " ").title()
+
+		zone = "Unknown Zone"
+		if isinstance(event.metadata, dict):
+			zone = (
+				event.metadata.get("zone")
+				or event.metadata.get("location")
+				or event.metadata.get("camera_zone")
+				or zone
+			)
+
+		track_part = f"T{event.track_id}" if event.track_id is not None else "TNA"
+		incident_id = f"INC-{int(event.timestamp)}-{event.frame_number}-{track_part}"
+
 		payload = {
-			"event_type": event.event_type,
-			"severity": event.severity.name,
-			"camera_id": event.camera_id,
-			"timestamp": event.timestamp,
-			"frame_number": event.frame_number,
-			"track_id": event.track_id,
-			"description": event.description,
-			"metadata": event.metadata,
-			"bbox": list(event.bbox) if event.bbox else None,
+			"id": incident_id,
+			"zone": str(zone),
+			"classification": classification,
+			"severity": severity,
+			"root_cause": event.description or "Auto-detected by edge_ai pipeline",
+			"corrective_action": "Investigate and acknowledge incident",
+			"created_at": time.strftime("%Y-%m-%d", time.localtime(event.timestamp)),
 		}
 		return BackendClient._to_json_safe(payload)
 

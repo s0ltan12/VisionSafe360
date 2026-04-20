@@ -1,0 +1,5 @@
+{
+  "name": "VisionSafe 360",
+  "description": "A responsive safety monitoring dashboard with live camera feeds, alert management, and incident reporting.",
+  "requestFramePermissions": []
+}

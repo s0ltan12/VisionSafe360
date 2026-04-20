@@ -57,8 +57,9 @@ PROFILES_DIR = BASE_DIR / "profiles"
 CALIBRATION_DIR = BASE_DIR / "calibration"
 
 # --- Model weights (pose-only)
-POSE_WEIGHTS = BASE_DIR / "weights" / "yolo11n-pose.pt"
-POSE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "yolov8n-pose.pt"
+# Accuracy-first default: use the larger YOLO11s pose checkpoint when available.
+POSE_WEIGHTS = BASE_DIR / "weights" / "yolo11s-pose.pt"
+POSE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "yolo11n-pose.pt"
 
 # --- Optional proximity/forklift detector (YOLO detect model)
 PROXIMITY_WEIGHTS = BASE_DIR / "weights" / "forklift" / "best_forklift.pt"
@@ -70,20 +71,20 @@ PPE_FALLBACK_WEIGHTS = BASE_DIR / "weights" / "ppe" / "yolov8n.pt"
 
 # --- Inference parameters
 IMGSZ = 640  # DO NOT increase - each +64px ~ +15% VRAM
-PRECISION = "fp16"  # half=True on CUDA: halves VRAM, ~2× faster
-CONF_THRESHOLD = 0.32  # slightly lower for better track continuity
-IOU_THRESHOLD = 0.45  # standard NMS
+PRECISION = "fp32"  # accuracy-first default; switch to fp16 for throughput
+CONF_THRESHOLD = 0.38  # stricter default to reduce false positives
+IOU_THRESHOLD = 0.50  # slightly stricter NMS for cleaner boxes
 MAX_DET = 50  # cap detections per frame
 INFERENCE_DEVICE = "cuda:0"  # will fall back to "cpu" if CUDA unavailable
 
 # Optional second model params (forklift/person proximity)
-PROXIMITY_CONF_THRESHOLD = 0.35
-PROXIMITY_IOU_THRESHOLD = 0.45
+PROXIMITY_CONF_THRESHOLD = 0.40
+PROXIMITY_IOU_THRESHOLD = 0.50
 PROXIMITY_MAX_DET = 50
 
 # Optional third model params (PPE)
-PPE_CONF_THRESHOLD = 0.25
-PPE_IOU_THRESHOLD = 0.45
+PPE_CONF_THRESHOLD = 0.30
+PPE_IOU_THRESHOLD = 0.50
 PPE_MAX_DET = 100
 
 # When using generic COCO weights, forklift is often classified as "truck".
@@ -137,8 +138,9 @@ BACKEND_EVENTS_ENABLED = _env_bool("VISIONSAFE_BACKEND_EVENTS_ENABLED", True)
 DEFAULT_BACKEND_URL = "http://localhost:8000"
 BACKEND_URL = os.getenv("VISIONSAFE_BACKEND_URL", DEFAULT_BACKEND_URL)
 
-BACKEND_INCIDENTS_PATH = os.getenv("VISIONSAFE_BACKEND_INCIDENTS_PATH", "/incidents")
+BACKEND_INCIDENTS_PATH = os.getenv("VISIONSAFE_BACKEND_INCIDENTS_PATH", "/api/incidents")
 BACKEND_AUTH_TOKEN = os.getenv("VISIONSAFE_BACKEND_AUTH_TOKEN", "")
+BACKEND_SOURCE_ID = os.getenv("VISIONSAFE_BACKEND_SOURCE_ID", "")
 
 DEFAULT_BACKEND_TIMEOUT = 5.0
 BACKEND_TIMEOUT = _env_float("VISIONSAFE_BACKEND_TIMEOUT", DEFAULT_BACKEND_TIMEOUT)
@@ -201,7 +203,7 @@ SIREN_COOLDOWN_SEC = _env_float("VISIONSAFE_SIREN_COOLDOWN_SEC", 5.0)
 SIREN_MAX_ACTIVE_SEC = _env_float("VISIONSAFE_SIREN_MAX_ACTIVE_SEC", 2.0)
 
 # --- HazardAnalyzer - Fall detection
-FALL_ASPECT_RATIO_THRESHOLD = 0.85  # w/h above which person may be lying
+FALL_ASPECT_RATIO_THRESHOLD = 0.90  # w/h above which person may be lying
 FALL_HIP_RATIO_THRESHOLD = 0.2  # hip position below this = falling
 FALL_HIP_RECOVERY_THRESHOLD = 0.6  # hip position above this = recovered
 FALL_VELOCITY_THRESHOLD = 15.0  # pixels/frame downward velocity
@@ -209,14 +211,16 @@ FALL_VELOCITY_WINDOW = 8  # frames to compute velocity over
 FALL_CANDIDATE_TIMEOUT = 2.0  # seconds in fall position to confirm
 FALL_IMMOBILITY_THRESHOLD = 5.0  # max px movement to count as "immobile"
 FALL_AREA_JITTER_THRESHOLD = 0.15  # max relative area change for immobility
-FALL_COOLDOWN_SEC = 60.0  # before same track re-fires
+FALL_SEATED_GUARD_DY = 6.0  # if vertical motion is below this, treat as stable low posture
+FALL_SEATED_GUARD_AR_SPREAD = 0.10  # low aspect-ratio variation suggests seated/static posture
+FALL_COOLDOWN_SEC = 20.0  # before same track re-fires
 FALL_TRACK_PURGE_SEC = 5.0  # purge stale track state
 
 # --- PostureAnalyzer thresholds
 POSTURE_KEYPOINT_CONF_MIN = 0.5  # discard keypoints below this
 POSTURE_EMA_ALPHA = 0.6  # temporal smoothing weight
-POSTURE_SUSTAINED_THRESHOLD = 3.0  # seconds of poor posture before event
-POSTURE_COOLDOWN_SEC = 60.0  # per track_id cooldown
+POSTURE_SUSTAINED_THRESHOLD = 4.0  # seconds of poor posture before event
+POSTURE_COOLDOWN_SEC = 20.0  # per track_id cooldown
 TEMPORAL_SMOOTH_WINDOW = 5
 ERGONOMIC_SCORE_WINDOW = 90  # frames at 1.5Hz ~ 60s
 

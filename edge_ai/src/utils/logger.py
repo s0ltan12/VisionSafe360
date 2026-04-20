@@ -1,6 +1,7 @@
 """
 Structured JSON logger — emits one JSON line per processed frame to stdout.
 """
+import os
 import json
 import logging
 import sys
@@ -57,6 +58,34 @@ class MetricsLogger:
 
 def setup_logging(level: str = "INFO") -> None:
     """Configure human-readable logging for library / application messages."""
+    json_logs = os.getenv("VISIONSAFE_LOG_JSON", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    if json_logs:
+        class _JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                payload = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                }
+                if record.exc_info:
+                    payload["exception"] = self.formatException(record.exc_info)
+                return json.dumps(payload, ensure_ascii=False)
+
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(_JsonFormatter())
+        logging.basicConfig(
+            level=getattr(logging, level.upper(), logging.INFO),
+            handlers=[handler],
+        )
+        return
+
     fmt = "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),

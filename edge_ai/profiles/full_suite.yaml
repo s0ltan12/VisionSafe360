@@ -24,7 +24,7 @@ modules:
     schedule_every_n: 10          # ~1.5 Hz
 
   proximity_analyzer:
-    enabled: true
+    enabled: false
     weights: "weights/forklift/best_forklift.pt"   # trained forklift model
     schedule_every_n: 2            # run at ~7.5 Hz when infer fps=15
 
