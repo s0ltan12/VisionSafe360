@@ -40,8 +40,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
          .then(({ user, token }) => {
             onLogin({ name: user.name, role: user.role }, token);
          })
-         .catch(() => {
+         .catch((err: any) => {
             setAuthToken(null);
+            const message = String(err?.message || '');
+            if (message.includes('Failed to fetch') || message.includes('NetworkError') || message.includes('HTTP 502')) {
+              setError('Cannot reach backend service. Please verify API is up and reachable.');
+              return;
+            }
             setError('Invalid credentials. Use the seeded demo accounts or a valid email/password pair.');
          })
          .finally(() => setLoading(false));

@@ -29,6 +29,10 @@ class ModelCapabilityReport:
     def vehicle_mode(self) -> str:
         return "forklift" if self.proximity_capable else "none"
 
+    @property
+    def has_person(self) -> bool:
+        return True
+
     def log_report(self) -> None:
         logger.info("═══ Model Capability Report ═══")
         logger.info("  Pose:      %s", "✓" if self.pose_capable else "✗")

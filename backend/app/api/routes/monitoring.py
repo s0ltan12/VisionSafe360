@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends
 
 from ...services.monitoring_service import monitoring_service
 from ...services.rate_limit_service import rate_limit_service
-from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 
-router = APIRouter(prefix="/api/monitoring", tags=["monitoring"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(require_roles("admin"))])
 
 
 @router.get("/metrics")

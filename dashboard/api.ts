@@ -7,7 +7,7 @@ import {Alert, Camera, DemoVideo, Incident, JobStatus, User} from './types';
 
 const env = (import.meta as any).env ?? {};
 
-const BASE_URL = String(env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const BASE_URL = String(env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
 function resolveWsBaseUrl(): string {
   const configured = String(env.VITE_WS_BASE_URL || '').trim();
@@ -21,6 +21,12 @@ function resolveWsBaseUrl(): string {
   if (BASE_URL.startsWith('http://')) {
     return `ws://${BASE_URL.slice('http://'.length)}`;
   }
+
+  if (typeof window !== 'undefined') {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${wsProtocol}://${window.location.host}`;
+  }
+
   return 'ws://localhost:8000';
 }
 
@@ -126,7 +132,7 @@ function toFrontendJobStatus(s: any): JobStatus {
 
 export const AlertsAPI = {
   getAll: () =>
-    request<Alert[]>('/api/alerts'),
+    request<Alert[]>('/api/alerts/all'),
 
   update: (id: string, changes: Partial<Alert>) =>
     request<Alert>(`/api/alerts/${id}`, {
@@ -186,7 +192,7 @@ export const CamerasAPI = {
 
 export const IncidentsAPI = {
   getAll: async (): Promise<Incident[]> => {
-    const data = await request<any[]>('/api/incidents');
+    const data = await request<any[]>('/api/incidents/all');
     return data.map(toFrontendIncident);
   },
 
@@ -292,3 +298,40 @@ export const JobsAPI = {
     return toFrontendJobStatus(data);
   },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UPLOAD
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const UploadAPI = {
+  uploadVideo: async (file: File): Promise<any> => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${BASE_URL}/api/media/upload`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail?.detail || `Upload failed: HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AI STREAM
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build WebSocket URL for AI-annotated frame stream.
+ */
+export function getAIStreamUrl(cameraId: string): string {
+  const token = getToken();
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${WS_BASE_URL}/ws/stream/${encodeURIComponent(cameraId)}${tokenParam}`;
+}

@@ -8,7 +8,7 @@ from ...schemas import JobStartRequest, JobStatusResponse
 from ...services.job_service import job_service
 from ...utils.security import get_current_user
 
-router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("/start", response_model=JobStatusResponse)

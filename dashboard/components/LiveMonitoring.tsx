@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
 	ArrowLeft,
 	Grid,
@@ -12,8 +12,10 @@ import {
 	VolumeX,
 	Video,
 	Radio,
+	Upload,
+	Cpu,
 } from 'lucide-react';
-import { DemoVideosAPI, IncidentsAPI, JobsAPI, WS_BASE_URL, getAuthToken } from '../api';
+import { DemoVideosAPI, IncidentsAPI, JobsAPI, UploadAPI, getAIStreamUrl, WS_BASE_URL, getAuthToken } from '../api';
 import { DemoVideo, Incident, JobStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -89,7 +91,7 @@ const DemoVideoCard = ({
 	);
 };
 
-const IncidentItem = ({ incident }: { incident: Incident }) => {
+const IncidentItem: React.FC<{ incident: Incident }> = ({ incident }) => {
 	return (
 		<div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 transition-colors hover:border-zinc-700">
 			<div className="flex items-start justify-between gap-3">
@@ -110,7 +112,7 @@ const IncidentItem = ({ incident }: { incident: Incident }) => {
 const LiveMonitoring = () => {
 	const { t } = useLanguage();
 	const [layout, setLayout] = useState<4 | 9>(4);
-	const [viewMode, setViewMode] = useState<'file' | 'stream'>('file');
+	const [viewMode, setViewMode] = useState<'file' | 'stream' | 'ai'>('file');
 	const [videos, setVideos] = useState<DemoVideo[]>([]);
 	const [selectedVideoId, setSelectedVideoId] = useState<string>('');
 	const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -125,6 +127,14 @@ const LiveMonitoring = () => {
 	const wsRef = useRef<WebSocket | null>(null);
 	const reconnectTimerRef = useRef<number | null>(null);
 	const reconnectAttemptRef = useRef(0);
+
+	// AI Stream state
+	const [aiStreamUrl, setAiStreamUrl] = useState<string | null>(null);
+	const aiStreamWsRef = useRef<WebSocket | null>(null);
+	const aiCanvasRef = useRef<HTMLCanvasElement | null>(null);
+	const [aiStreamConnected, setAiStreamConnected] = useState(false);
+	const [uploadBusy, setUploadBusy] = useState(false);
+	const fileInputRef = useRef<HTMLInputElement | null>(null);
 
 	const selectedVideo = videos.find((video) => video.id === selectedVideoId) ?? videos[0] ?? null;
 
@@ -196,6 +206,72 @@ const LiveMonitoring = () => {
 			setJobBusy(false);
 		}
 	};
+
+	const handleUpload = async () => {
+		fileInputRef.current?.click();
+	};
+
+	const onFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+		setUploadBusy(true);
+		setJobError(null);
+		try {
+			await UploadAPI.uploadVideo(file);
+			await loadVideos();
+		} catch (err: any) {
+			setJobError(err?.message ?? 'Upload failed');
+		} finally {
+			setUploadBusy(false);
+			e.target.value = '';
+		}
+	};
+
+	// Connect AI stream WebSocket when viewMode is 'ai' and job is running
+	useEffect(() => {
+		if (viewMode !== 'ai' || !jobStatus.running) {
+			if (aiStreamWsRef.current) {
+				aiStreamWsRef.current.close();
+				aiStreamWsRef.current = null;
+			}
+			setAiStreamConnected(false);
+			return;
+		}
+
+		const cameraId = jobStatus.cameraId || 'cam_01';
+		const url = getAIStreamUrl(cameraId);
+		const ws = new WebSocket(url);
+		ws.binaryType = 'arraybuffer';
+		aiStreamWsRef.current = ws;
+
+		ws.onopen = () => setAiStreamConnected(true);
+		ws.onclose = () => setAiStreamConnected(false);
+		ws.onerror = () => ws.close();
+
+		ws.onmessage = (event) => {
+			if (event.data instanceof ArrayBuffer) {
+				const blob = new Blob([event.data], { type: 'image/jpeg' });
+				const imgUrl = URL.createObjectURL(blob);
+				const img = new Image();
+				img.onload = () => {
+					const canvas = aiCanvasRef.current;
+					if (canvas) {
+						canvas.width = img.width;
+						canvas.height = img.height;
+						const ctx2d = canvas.getContext('2d');
+						if (ctx2d) ctx2d.drawImage(img, 0, 0);
+					}
+					URL.revokeObjectURL(imgUrl);
+				};
+				img.src = imgUrl;
+			}
+		};
+
+		return () => {
+			ws.close();
+			aiStreamWsRef.current = null;
+		};
+	}, [viewMode, jobStatus.running, jobStatus.cameraId]);
 
 	useEffect(() => {
 		loadVideos().catch(() => {
@@ -336,6 +412,14 @@ const LiveMonitoring = () => {
 								>
 									<Square size={12} /> Stop
 								</button>
+								<input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={onFileSelected} />
+								<button
+									onClick={handleUpload}
+									disabled={uploadBusy}
+									className="inline-flex items-center gap-2 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									<Upload size={12} /> {uploadBusy ? 'Uploading...' : 'Upload'}
+								</button>
 								<div className="flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950 p-1">
 									<button
 										onClick={() => setViewMode('file')}
@@ -348,6 +432,12 @@ const LiveMonitoring = () => {
 										className={`inline-flex items-center gap-1 rounded-full px-3 py-1 transition-colors ${viewMode === 'stream' ? 'bg-vs-orange text-black' : 'text-zinc-400 hover:text-white'}`}
 									>
 										<Radio size={12} /> Stream
+									</button>
+									<button
+										onClick={() => setViewMode('ai')}
+										className={`inline-flex items-center gap-1 rounded-full px-3 py-1 transition-colors ${viewMode === 'ai' ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-white'}`}
+									>
+										<Cpu size={12} /> AI Stream
 									</button>
 								</div>
 								<span>{lastUpdated ? `Last sync ${lastUpdated}` : 'Syncing incidents'}</span>
@@ -365,7 +455,30 @@ const LiveMonitoring = () => {
 						) : null}
 
 						<div className="relative flex-1 min-h-[320px] bg-black">
-							{selectedVideo ? (
+							{viewMode === 'ai' ? (
+								<div className="flex h-full w-full items-center justify-center">
+									{jobStatus.running ? (
+										<>
+											<canvas ref={aiCanvasRef} className="h-full w-full object-contain" />
+											{!aiStreamConnected && (
+												<div className="absolute inset-0 flex items-center justify-center bg-black/60">
+													<div className="text-center">
+														<Cpu size={32} className="mx-auto text-emerald-400 animate-pulse" />
+														<p className="mt-3 text-sm font-semibold text-white">Connecting to AI Stream...</p>
+														<p className="mt-1 text-xs text-zinc-400">Waiting for YOLO pipeline frames</p>
+													</div>
+												</div>
+											)}
+										</>
+									) : (
+										<div className="text-center p-8">
+											<Cpu size={40} className="mx-auto text-zinc-600" />
+											<p className="mt-4 text-sm font-semibold text-zinc-300">AI Pipeline Not Running</p>
+											<p className="mt-2 text-xs text-zinc-500">Select a video and click Start to begin real-time YOLO detection</p>
+										</div>
+									)}
+								</div>
+							) : selectedVideo ? (
 								viewMode === 'file' ? (
 									<video
 										key={selectedVideo.streamUrl}

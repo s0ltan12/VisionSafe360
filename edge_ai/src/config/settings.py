@@ -208,7 +208,7 @@ FALL_HIP_RATIO_THRESHOLD = 0.2  # hip position below this = falling
 FALL_HIP_RECOVERY_THRESHOLD = 0.6  # hip position above this = recovered
 FALL_VELOCITY_THRESHOLD = 15.0  # pixels/frame downward velocity
 FALL_VELOCITY_WINDOW = 8  # frames to compute velocity over
-FALL_CANDIDATE_TIMEOUT = 2.0  # seconds in fall position to confirm
+FALL_CANDIDATE_TIMEOUT = 2.5  # seconds in fall position to confirm
 FALL_IMMOBILITY_THRESHOLD = 5.0  # max px movement to count as "immobile"
 FALL_AREA_JITTER_THRESHOLD = 0.15  # max relative area change for immobility
 FALL_SEATED_GUARD_DY = 6.0  # if vertical motion is below this, treat as stable low posture

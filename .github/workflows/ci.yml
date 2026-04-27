@@ -1,0 +1,124 @@
+name: CI — Lint, Test & Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ── Backend: lint + test ─────────────────────────────────────────────
+  backend:
+    name: Backend (Python)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: visionsafe360_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: backend
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check app/ --select E,F,W --ignore E501
+        working-directory: backend
+        continue-on-error: true   # Warn but don't block graduation project
+
+      - name: Run backend tests
+        env:
+          DATABASE_URL: postgresql+pg8000://postgres:postgres_test@localhost:5432/visionsafe360_test
+          SECRET_KEY: ci_test_secret_key_minimum_32_chars_required
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          APP_ENV: test
+        run: python -m pytest tests/ -v --tb=short
+        working-directory: backend
+
+  # ── Edge AI: lint + unit tests ───────────────────────────────────────
+  edge_ai:
+    name: Edge AI (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: edge_ai/requirements.txt
+
+      - name: Install CPU-only dependencies
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+        working-directory: edge_ai
+
+      - name: Run Edge AI unit tests
+        run: python -m pytest tests/ -v --tb=short --ignore=tests/test_inference_engine.py
+        working-directory: edge_ai
+
+  # ── Dashboard: lint + build ──────────────────────────────────────────
+  dashboard:
+    name: Dashboard (Node.js)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: dashboard
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+        working-directory: dashboard
+        continue-on-error: true
+
+      - name: Build dashboard
+        env:
+          VITE_API_BASE_URL: http://localhost:8000
+        run: npm run build
+        working-directory: dashboard

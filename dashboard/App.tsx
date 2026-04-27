@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   LayoutDashboard, 
   Video, 
@@ -74,13 +74,9 @@ const AppContent = () => {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const { language, setLanguage, dir, t } = useLanguage();
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    { id: 1, message: 'PPE violation detected in Zone A - Welding', time: '2 min ago', read: false, type: 'alert' },
-    { id: 2, message: 'Camera CAM-03 went offline', time: '15 min ago', read: false, type: 'system' },
-    { id: 3, message: 'New incident report submitted by Sarah Chen', time: '32 min ago', read: false, type: 'info' },
-    { id: 4, message: 'Fall detected in Zone C - Loading Dock', time: '1 hour ago', read: true, type: 'alert' },
-    { id: 5, message: 'System health check completed - All nodes online', time: '2 hours ago', read: true, type: 'system' },
-  ]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const notifWsRef = useRef<WebSocket | null>(null);
+  const notifIdCounter = useRef(100);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -91,6 +87,57 @@ const AppContent = () => {
   const dismissNotification = (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
+
+  // Connect to real-time notification WebSocket
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const token = localStorage.getItem('visionsafe360_token');
+    if (!token) return;
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const envMeta = (import.meta as any).env ?? {};
+    const wsHost = envMeta.VITE_API_BASE_URL
+      ? String(envMeta.VITE_API_BASE_URL).replace(/^https?:\/\//, '').replace(/\/+$/, '')
+      : `${window.location.host}`;
+    const wsUrl = `${wsProtocol}://${wsHost}/ws/notifications?token=${encodeURIComponent(token)}`;
+
+    const connect = () => {
+      const ws = new WebSocket(wsUrl);
+      notifWsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'keepalive') return;
+          if (payload.type === 'incident_created' || payload.type === 'notification') {
+            notifIdCounter.current += 1;
+            const msg = payload.message || payload.incident?.classification || 'New alert detected';
+            setNotifications(prev => [{
+              id: notifIdCounter.current,
+              message: msg,
+              time: 'just now',
+              read: false,
+              type: 'alert',
+            }, ...prev].slice(0, 50));
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        setTimeout(connect, 5000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (notifWsRef.current) {
+        notifWsRef.current.close();
+        notifWsRef.current = null;
+      }
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const token = localStorage.getItem('visionsafe360_token');

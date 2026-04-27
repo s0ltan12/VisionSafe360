@@ -25,7 +25,7 @@ modules:
 
   proximity_analyzer:
     enabled: true
-    weights: "weights/forklift/best_forklift.pt"
+    weights: "/home/etsh/Documents/علم/graduation project/There is no going back; it's either survival or survival./VisionSafe360/edge_ai/weights/forklift/best_forklift.pt"
     schedule_every_n: 2
 
 ui:

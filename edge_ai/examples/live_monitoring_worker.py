@@ -14,7 +14,13 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+import sys
 from pathlib import Path
+
+# Add project root to path so 'src' can be imported
+_EDGE_AI_DIR = Path(__file__).resolve().parent.parent
+if str(_EDGE_AI_DIR) not in sys.path:
+    sys.path.insert(0, str(_EDGE_AI_DIR))
 
 import cv2
 

@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from ..models import User
 from ..schemas import LoginRequest, UserCreate, UserUpdate
-from ..utils.security import create_access_token, hash_password, verify_password
+from ..utils.security import (
+    create_access_token,
+    hash_password,
+    normalize_role,
+    storage_role,
+    validate_password_strength,
+    verify_password,
+)
 
 
 class UserService:
@@ -30,6 +37,8 @@ class UserService:
 		if UserService.get_by_email(db, payload.email):
 			raise ValueError("Email already registered")
 		data = payload.model_dump(exclude={"password"})
+		if data.get("role"):
+			data["role"] = storage_role(data["role"])
 		user = User(**data, password_hash=hash_password(payload.password) if payload.password else None)
 		db.add(user)
 		db.commit()
@@ -45,6 +54,8 @@ class UserService:
 			raise ValueError("Email already registered")
 		update_data = payload.model_dump(exclude_unset=True)
 		password = update_data.pop("password", None)
+		if update_data.get("role"):
+			update_data["role"] = storage_role(update_data["role"])
 		if password:
 			user.password_hash = hash_password(password)
 		for field, value in update_data.items():
@@ -78,4 +89,4 @@ class AuthService:
 		user = AuthService.authenticate(db, payload)
 		if not user:
 			raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-		return create_access_token(subject=user.email)
+		return create_access_token(subject=user.email, role=normalize_role(user.role))

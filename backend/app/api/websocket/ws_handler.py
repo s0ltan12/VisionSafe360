@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ...config.database import SessionLocal
+from ...utils.audit_logger import audit_event, ensure_request_id, get_client_ip_from_websocket
 from ...services.monitoring_service import monitoring_service
 from ...utils.security import get_user_from_token
 
@@ -71,6 +73,8 @@ def _extract_ws_token(websocket: WebSocket) -> str | None:
 
 @router.websocket("/ws/incidents")
 async def incidents_ws(websocket: WebSocket):
+	request_id = ensure_request_id(websocket.headers.get("x-request-id") or str(uuid.uuid4()))
+	ip_address = get_client_ip_from_websocket(websocket)
 	token = _extract_ws_token(websocket)
 	if not token:
 		logger.warning("ws unauthorized: missing token", extra={"event": "ws_unauthorized"})
@@ -94,6 +98,15 @@ async def incidents_ws(websocket: WebSocket):
 		"ws connected",
 		extra={"event": "ws_connected", "ws_connections": active},
 	)
+	audit_event(
+		"websocket_connect",
+		user_id=user.id,
+		ip_address=ip_address,
+		request_id=request_id,
+		outcome="success",
+		ws_connections=active,
+	)
+	disconnect_reason = "success"
 	try:
 		await websocket.send_json(
 			{
@@ -106,16 +119,25 @@ async def incidents_ws(websocket: WebSocket):
 			# Keep connection alive; ignore incoming payloads for this MVP.
 			await websocket.receive_text()
 	except WebSocketDisconnect:
+		disconnect_reason = "disconnect"
+	except Exception:
+		disconnect_reason = "error"
+		logger.exception(
+			"ws error",
+			extra={"event": "ws_error", "ws_connections": active},
+		)
+	finally:
 		incident_ws_manager.disconnect(websocket)
 		active = monitoring_service.ws_disconnected()
 		logger.info(
 			"ws disconnected",
 			extra={"event": "ws_disconnected", "ws_connections": active},
 		)
-	except Exception:
-		incident_ws_manager.disconnect(websocket)
-		active = monitoring_service.ws_disconnected()
-		logger.exception(
-			"ws error",
-			extra={"event": "ws_error", "ws_connections": active},
+		audit_event(
+			"websocket_disconnect",
+			user_id=user.id,
+			ip_address=ip_address,
+			request_id=request_id,
+			outcome=disconnect_reason,
+			ws_connections=active,
 		)

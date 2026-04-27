@@ -1,29 +1,28 @@
 """SQLAlchemy engine/session configuration for VisionSafe backend."""
-
 from __future__ import annotations
 
-import os
-
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-load_dotenv()
+from .settings import settings
 
-DATABASE_URL = os.getenv(
-	"DATABASE_URL",
-	"postgresql+pg8000://postgres:postgres@localhost:5432/visionsafe360",
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,   # Detect stale connections automatically
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=1800,    # Recycle connections every 30 minutes
 )
 
-engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
 def get_db():
-	"""Yield a DB session and close it after request processing."""
-	db = SessionLocal()
-	try:
-		yield db
-	finally:
-		db.close()
+    """Yield a DB session and close it after request processing."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

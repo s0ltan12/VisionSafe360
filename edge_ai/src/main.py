@@ -75,6 +75,7 @@ from src.utils.logger import MetricsLogger, setup_logging
 from src.utils.drawing import draw_detections, draw_hud, draw_hazard_events  # kept as fallback
 from src.ui.renderer import SafetyOverlayRenderer
 from src.config.ui_settings import load_ui_settings_from_profile
+from src.streaming.frame_publisher import FramePublisher
 
 logger = logging.getLogger("PipelineOrchestrator")
 
@@ -274,9 +275,11 @@ class PipelineContext:
     ppe_every_n: int
 
     show: bool
+    headless: bool
     win_name: str
     writer: Optional[cv2.VideoWriter]
     out_path: Optional[Path]
+    frame_publisher: Optional[FramePublisher]
 
     frame_counter: int
     frames_processed: int
@@ -544,11 +547,16 @@ class FrameProcessor:
             now=ts_now,
         )
 
+        # Publish annotated frame to Redis for dashboard streaming
+        if ctx.frame_publisher is not None:
+            ctx.frame_publisher.publish(annotated)
+
         return FrameResult(annotated=annotated)
 
 
 def _build_pipeline_context(
-    source: str | int, cam_id: str, show: bool, profile: ProfileConfig
+    source: str | int, cam_id: str, show: bool, profile: ProfileConfig,
+    headless: bool = False,
 ) -> PipelineContext:
     stream = StreamHandler(source=source, camera_id=cam_id)
     engine = InferenceEngine()
@@ -626,12 +634,18 @@ def _build_pipeline_context(
     )
 
     win_name = f"VisionSafe360 - {cam_id}"
-    if show:
+    if show and not headless:
         cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+
+    # Frame publisher for headless dashboard streaming
+    frame_publisher: Optional[FramePublisher] = None
+    if headless:
+        frame_publisher = FramePublisher(camera_id=cam_id)
+        logger.info("Headless mode enabled — frames will be streamed via Redis")
 
     writer = None
     out_path = None
-    if not show:
+    if not show and not headless:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         out_path = OUTPUT_DIR / f"{cam_id}_out.mp4"
         logger.info("Output video → %s", out_path)
@@ -660,9 +674,11 @@ def _build_pipeline_context(
         proximity_every_n=proximity_every_n,
         ppe_every_n=ppe_every_n,
         show=show,
+        headless=headless,
         win_name=win_name,
         writer=writer,
         out_path=out_path,
+        frame_publisher=frame_publisher,
         frame_counter=0,
         frames_processed=0,
         fps_t0=time.monotonic(),
@@ -701,9 +717,11 @@ def _shutdown_pipeline(ctx: PipelineContext) -> None:
             t.join(timeout=2.0)
     except Exception:
         pass
+    if ctx.frame_publisher is not None:
+        ctx.frame_publisher.close()
     if ctx.writer is not None:
         ctx.writer.release()
-    if ctx.show:
+    if ctx.show and not ctx.headless:
         cv2.destroyAllWindows()
 
 
@@ -731,10 +749,10 @@ def _maybe_write_step2_report(ctx: PipelineContext) -> None:
 #  Main pipeline
 # ════════════════════════════════════════════════════════════════════
 
-def run_pipeline(source: str | int, cam_id: str, show: bool, profile: ProfileConfig) -> None:
+def run_pipeline(source: str | int, cam_id: str, show: bool, profile: ProfileConfig, headless: bool = False) -> None:
     """Single-camera inference loop. Blocks until Ctrl-C or stream exhaustion."""
 
-    ctx = _build_pipeline_context(source=source, cam_id=cam_id, show=show, profile=profile)
+    ctx = _build_pipeline_context(source=source, cam_id=cam_id, show=show, profile=profile, headless=headless)
     processor = FrameProcessor(ctx)
     infer_interval = 1.0 / TARGET_INFER_FPS
 
@@ -755,12 +773,13 @@ def run_pipeline(source: str | int, cam_id: str, show: bool, profile: ProfileCon
 
             result = processor.process(bundle)
 
-            if ctx.show:
+            if ctx.headless:
+                # Headless mode: frames are published via FramePublisher in
+                # FrameProcessor.process(). No GUI or file output needed.
+                pass
+            elif ctx.show:
                 cv2.imshow(ctx.win_name, result.annotated)
                 key = cv2.waitKey(1) & 0xFF
-                # Only quit on explicit `q`.
-                # Some environments may report `ESC` implicitly; using `q` only
-                # prevents accidental early termination.
                 if key == ord("q"):
                     logger.info("User pressed quit key")
                     break
@@ -824,6 +843,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--show", action="store_true",
         help="Display annotated frames in cv2.imshow windows.",
+    )
+    p.add_argument(
+        "--headless", action="store_true",
+        help="Run without GUI. Stream annotated frames to Redis for dashboard.",
     )
     p.add_argument(
         "--profile", default="full_suite",
@@ -1207,9 +1230,11 @@ def main() -> None:
 
     profile = load_profile(args.profile)
     
+    headless = getattr(args, 'headless', False)
+
     if len(sources) == 1:
         # Single camera - use original pipeline
-        run_pipeline(source=sources[0], cam_id=args.cam_id, show=args.show, profile=profile)
+        run_pipeline(source=sources[0], cam_id=args.cam_id, show=args.show, profile=profile, headless=headless)
     else:
         # Multiple cameras - use parallel pipeline with shared models
         run_multi_camera_pipeline(sources=sources, show=args.show, profile=profile)

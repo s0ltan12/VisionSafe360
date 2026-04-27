@@ -1,0 +1,51 @@
+# Alembic Directory
+
+This directory contains database migration files for VisionSafe 360.
+
+## Directory Structure
+
+- **env.py**: Configuration script for Alembic. Imports models and database connection settings.
+- **script.py.mako**: Jinja template for generating new migration files.
+- **versions/**: Contains all migration files (numbered and named, e.g., `23137d6336b1_initial_migration.py`)
+
+## Migration Files
+
+Each migration file contains:
+- `upgrade()`: SQL operations to apply the migration
+- `downgrade()`: SQL operations to revert the migration
+- Revision metadata (ID, parent revision, creation timestamp)
+
+Example:
+```python
+def upgrade() -> None:
+    op.add_column('users', sa.Column('email', sa.String(255)))
+
+def downgrade() -> None:
+    op.drop_column('users', 'email')
+```
+
+## Common Tasks
+
+### Generate a New Migration
+```bash
+alembic revision --autogenerate -m "Migration description"
+```
+
+### Apply All Pending Migrations
+```bash
+alembic upgrade head
+```
+
+### Revert Last Migration
+```bash
+alembic downgrade -1
+```
+
+### See Migration History
+```bash
+alembic history --verbose
+```
+
+## For More Information
+
+See [MIGRATIONS_GUIDE.md](../MIGRATIONS_GUIDE.md) in the backend directory for detailed usage instructions.

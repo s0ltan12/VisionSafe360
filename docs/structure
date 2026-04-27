@@ -125,12 +125,6 @@ VisionSafe360/
 ├── mobile_app/
 │   └── README.md
 │
-├── docs/
-│   ├── team1_streaming_doc.md
-│   ├── team2_detection_inference_doc.md
-│   ├── team3_analysis_classification_doc.md
-│   └── team4_alerts_integration_doc.md
-│
 ├── .gitignore
 ├── docker-compose.yml
 ├── README.md
