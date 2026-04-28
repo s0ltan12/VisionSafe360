@@ -105,3 +105,10 @@ offline_queue.db
 output/
 **/output/
 **/fall_snapshots/
+
+# =========================
+# Documentation
+# =========================
+*.md
+docs/
+doc_ai/
