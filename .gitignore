@@ -110,5 +110,6 @@ output/
 # Documentation
 # =========================
 *.md
+!README.md
 docs/
 doc_ai/
