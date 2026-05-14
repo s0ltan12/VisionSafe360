@@ -47,7 +47,10 @@ if str(_EDGE_AI_DIR) not in sys.path:
 
 from src.config.settings import (
     ALERTS_ENABLED,
+    BACKEND_CAMERA_NAME,
     BACKEND_EVENTS_ENABLED,
+    BACKEND_WORKER_GPU_ID,
+    BACKEND_WORKER_ID,
     DEBUG_MODE,
     LOG_LEVEL,
     OFFLINE_FLUSH_MAX_PER_CYCLE,
@@ -263,6 +266,9 @@ class PipelineContext:
     person_tracker_source: str
 
     backend_client: BackendClient
+    camera_name: str
+    worker_id: Optional[str]
+    worker_gpu_id: Optional[str]
     alert_manager: AlertManager
     siren_controller: SirenController
 
@@ -416,6 +422,13 @@ class FrameProcessor:
             )
 
         emitted_events = ctx.event_aggregator.process(hazard_events, ts_now)
+        for event in emitted_events:
+            if not getattr(event, "camera_name", None) and ctx.camera_name:
+                event.camera_name = ctx.camera_name
+            if not getattr(event, "worker_id", None) and ctx.worker_id:
+                event.worker_id = ctx.worker_id
+            if not getattr(event, "worker_gpu_id", None) and ctx.worker_gpu_id:
+                event.worker_gpu_id = ctx.worker_gpu_id
 
         delivery_metrics: dict[str, Any] = {
             "n_events_emitted": len(emitted_events),
@@ -665,6 +678,9 @@ def _build_pipeline_context(
         ppe_enabled=ppe_enabled,
         person_tracker_source=person_tracker_source,
         backend_client=backend_client,
+        camera_name=BACKEND_CAMERA_NAME or "",
+        worker_id=BACKEND_WORKER_ID or None,
+        worker_gpu_id=BACKEND_WORKER_GPU_ID or None,
         alert_manager=alert_manager,
         siren_controller=siren_controller,
         renderer=renderer,

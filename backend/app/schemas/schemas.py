@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from ..utils.security import validate_password_strength
 
@@ -36,11 +36,20 @@ class AlertBase(BaseModel):
     severity: str
     zone: str
     camera: str
-    occurred_at: Optional[datetime] = None
+    camera_id: Optional[str] = None
+    camera_name: Optional[str] = None
+    worker_id: Optional[str] = None
+    worker_gpu_id: Optional[str] = None
+    occurred_at: Optional[datetime] = Field(
+        default=None,
+        validation_alias=AliasChoices("occurred_at", "timestamp"),
+    )
     status: str = "New"
     description: str
     thumbnail: Optional[str] = None
     confidence: Optional[float] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AlertCreate(AlertBase):
@@ -67,6 +76,7 @@ class CameraBase(BaseModel):
     name: str
     zone: str
     url: Optional[str] = None
+    stream_url: Optional[str] = None  # RTSP/stream source for AI detection
     status: str = "Online"
     is_privacy_mode: bool = False
     thumbnail: Optional[str] = None
@@ -82,6 +92,7 @@ class CameraUpdate(BaseModel):
     name: Optional[str] = None
     zone: Optional[str] = None
     url: Optional[str] = None
+    stream_url: Optional[str] = None  # RTSP/stream source for AI detection
     status: Optional[str] = None
     is_privacy_mode: Optional[bool] = None
     fps: Optional[float] = None
@@ -101,6 +112,10 @@ class IncidentBase(BaseModel):
     zone: str
     classification: str
     severity: str
+    camera_id: Optional[str] = None
+    camera_name: Optional[str] = None
+    worker_id: Optional[str] = None
+    worker_gpu_id: Optional[str] = None
     root_cause: Optional[str] = "Under Investigation"
     corrective_action: Optional[str] = "Pending Review"
     created_at: Optional[datetime] = None
@@ -185,7 +200,9 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    expires_in: int = 480 * 60
 
 
 class TokenPayload(BaseModel):
@@ -196,7 +213,7 @@ class TokenPayload(BaseModel):
 # ── Jobs ──────────────────────────────────────────────────────────────
 
 class JobStartRequest(BaseModel):
-    source_name: str
+    source_name: Optional[str] = None  # filename, rtsp://, or None → resolve from camera.stream_url
     camera_id: str = "cam_01"
 
 

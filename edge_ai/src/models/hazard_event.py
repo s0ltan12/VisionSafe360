@@ -19,3 +19,6 @@ class HazardEvent:
     bbox: Optional[Tuple[int, int, int, int]] = field(default=None)
     description: str = ""
     metadata: dict = field(default_factory=dict)
+    camera_name: Optional[str] = field(default=None)
+    worker_id: Optional[str] = field(default=None)
+    worker_gpu_id: Optional[str] = field(default=None)

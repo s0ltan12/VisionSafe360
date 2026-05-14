@@ -71,6 +71,8 @@ class Alert(Base):
         Index("ix_alerts_type", "type"),
         Index("ix_alerts_severity", "severity"),
         Index("ix_alerts_zone", "zone"),
+        Index("ix_alerts_camera_id", "camera_id"),
+        Index("ix_alerts_worker_id", "worker_id"),
         Index("ix_alerts_status", "status"),
         Index("ix_alerts_occurred_at", "occurred_at"),
     )
@@ -80,6 +82,10 @@ class Alert(Base):
     severity    = Column(PgEnum(SeverityEnum,   name="severity",   create_type=False), nullable=False)
     zone        = Column(String, nullable=False)
     camera      = Column(String, nullable=False)
+    camera_id   = Column(String, nullable=True)
+    camera_name = Column(String, nullable=True)
+    worker_id   = Column(String, nullable=True)
+    worker_gpu_id = Column(String, nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     status      = Column(PgEnum(StatusEnum, name="status", create_type=False), default=StatusEnum.New)
     description = Column(Text, nullable=False)
@@ -99,6 +105,7 @@ class Camera(Base):
     name           = Column(String, nullable=False)
     zone           = Column(String, nullable=False)
     url            = Column(String, nullable=True)
+    stream_url     = Column(String(512), nullable=True)  # RTSP/stream source for AI detection
     status         = Column(String, default="Online")
     is_privacy_mode = Column(Boolean, default=False)
     thumbnail      = Column(String, nullable=True)
@@ -111,6 +118,8 @@ class Incident(Base):
     __table_args__ = (
         Index("ix_incidents_zone", "zone"),
         Index("ix_incidents_severity", "severity"),
+        Index("ix_incidents_camera_id", "camera_id"),
+        Index("ix_incidents_worker_id", "worker_id"),
         Index("ix_incidents_created_at", "created_at"),
     )
 
@@ -118,6 +127,10 @@ class Incident(Base):
     zone              = Column(String, nullable=False)
     classification    = Column(String, nullable=False)
     severity          = Column(PgEnum(SeverityEnum, name="severity", create_type=False), nullable=False)
+    camera_id         = Column(String, nullable=True)
+    camera_name       = Column(String, nullable=True)
+    worker_id         = Column(String, nullable=True)
+    worker_gpu_id     = Column(String, nullable=True)
     root_cause        = Column(Text, default="Under Investigation")
     corrective_action = Column(Text, default="Pending Review")
     created_at        = Column(DateTime(timezone=True), nullable=False, default=_utcnow)

@@ -116,6 +116,10 @@ function toFrontendIncident(i: any): Incident {
     zone:             i.zone,
     classification:   i.classification,
     severity:         i.severity,
+    cameraId:         i.camera_id ?? i.cameraId ?? null,
+    cameraName:       i.camera_name ?? i.cameraName ?? null,
+    workerId:         i.worker_id ?? i.workerId ?? null,
+    workerGpuId:      i.worker_gpu_id ?? i.workerGpuId ?? null,
     rootCause:        i.root_cause,
     correctiveAction: i.corrective_action,
     createdAt:        i.created_at,
@@ -141,6 +145,10 @@ function toFrontendAlert(a: any): Alert {
     severity:    a.severity,
     zone:        a.zone,
     camera:      a.camera,
+    cameraId:    a.camera_id ?? a.cameraId ?? null,
+    cameraName:  a.camera_name ?? a.cameraName ?? null,
+    workerId:    a.worker_id ?? a.workerId ?? null,
+    workerGpuId: a.worker_gpu_id ?? a.workerGpuId ?? null,
     timestamp:   a.occurred_at || a.timestamp || a.created_at || '',
     status:      a.status,
     description: a.description,
@@ -154,6 +162,22 @@ function toBackendAlert(alert: Partial<Alert>): any {
   if (alert.timestamp !== undefined) {
     body.occurred_at = alert.timestamp;
     delete body.timestamp;
+  }
+  if (alert.cameraId !== undefined) {
+    body.camera_id = alert.cameraId;
+    delete body.cameraId;
+  }
+  if (alert.cameraName !== undefined) {
+    body.camera_name = alert.cameraName;
+    delete body.cameraName;
+  }
+  if (alert.workerId !== undefined) {
+    body.worker_id = alert.workerId;
+    delete body.workerId;
+  }
+  if (alert.workerGpuId !== undefined) {
+    body.worker_gpu_id = alert.workerGpuId;
+    delete body.workerGpuId;
   }
   return body;
 }
@@ -246,6 +270,10 @@ export const IncidentsAPI = {
       zone:              incident.zone,
       classification:    incident.classification,
       severity:          incident.severity,
+      camera_id:         incident.cameraId,
+      camera_name:       incident.cameraName,
+      worker_id:         incident.workerId,
+      worker_gpu_id:     incident.workerGpuId,
       root_cause:        incident.rootCause,
       corrective_action: incident.correctiveAction,
       created_at:        incident.createdAt,

@@ -95,8 +95,8 @@ PROXIMITY_DANGER_PX = 80.0
 PROXIMITY_WARNING_PX = 140.0
 
 # --- FPS targets
-TARGET_INPUT_FPS = 15  # cap RTSP / file read rate
-TARGET_INFER_FPS = 15  # inference loop target
+TARGET_INPUT_FPS = 17  # cap RTSP / file read rate
+TARGET_INFER_FPS = 17  # inference loop target
 
 # --- Per-task scheduling (frame counter modulo)
 POSE_EVERY_N = 1
@@ -141,6 +141,9 @@ BACKEND_URL = os.getenv("VISIONSAFE_BACKEND_URL", DEFAULT_BACKEND_URL)
 BACKEND_INCIDENTS_PATH = os.getenv("VISIONSAFE_BACKEND_INCIDENTS_PATH", "/api/incidents")
 BACKEND_AUTH_TOKEN = os.getenv("VISIONSAFE_BACKEND_AUTH_TOKEN", "")
 BACKEND_SOURCE_ID = os.getenv("VISIONSAFE_BACKEND_SOURCE_ID", "")
+BACKEND_CAMERA_NAME = os.getenv("VISIONSAFE_BACKEND_CAMERA_NAME", "")
+BACKEND_WORKER_ID = os.getenv("VISIONSAFE_BACKEND_WORKER_ID", "")
+BACKEND_WORKER_GPU_ID = os.getenv("VISIONSAFE_BACKEND_WORKER_GPU_ID", "")
 
 DEFAULT_BACKEND_TIMEOUT = 5.0
 BACKEND_TIMEOUT = _env_float("VISIONSAFE_BACKEND_TIMEOUT", DEFAULT_BACKEND_TIMEOUT)
@@ -231,4 +234,3 @@ EVENT_MAX_UPDATES_PER_WINDOW = 3  # max severity escalations per window
 
 # --- Calibration (camera -> ground-plane)
 DEFAULT_PIXELS_PER_METER = 0.0  # 0 = uncalibrated (pixel mode)
-

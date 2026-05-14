@@ -39,6 +39,9 @@ class BackendClientConfig:
 	incidents_path: str = settings.BACKEND_INCIDENTS_PATH
 	auth_token: str = settings.BACKEND_AUTH_TOKEN
 	source_id: str = settings.BACKEND_SOURCE_ID
+	camera_name: str = settings.BACKEND_CAMERA_NAME
+	worker_id: str = settings.BACKEND_WORKER_ID
+	worker_gpu_id: str = settings.BACKEND_WORKER_GPU_ID
 	timeout_sec: float = settings.BACKEND_TIMEOUT
 	max_retry: int = settings.BACKEND_MAX_RETRY
 	retry_backoff: tuple[float, ...] = tuple(settings.BACKEND_RETRY_BACKOFF)
@@ -426,16 +429,25 @@ class BackendClient:
 
 		track_part = f"T{event.track_id}" if event.track_id is not None else "TNA"
 		incident_id = f"INC-{int(event.timestamp)}-{event.frame_number}-{track_part}"
+		camera_name = getattr(event, "camera_name", None) or settings.BACKEND_CAMERA_NAME or None
+		worker_id = getattr(event, "worker_id", None) or settings.BACKEND_WORKER_ID or None
+		worker_gpu_id = getattr(event, "worker_gpu_id", None) or settings.BACKEND_WORKER_GPU_ID or None
 
 		payload = {
 			"id": incident_id,
 			"zone": str(zone),
 			"classification": classification,
 			"severity": severity,
+			"camera_id": event.camera_id,
+			"camera_name": camera_name,
+			"worker_id": worker_id,
+			"worker_gpu_id": worker_gpu_id,
 			"root_cause": event.description or "Auto-detected by edge_ai pipeline",
 			"corrective_action": "Investigate and acknowledge incident",
 			"created_at": time.strftime("%Y-%m-%d", time.localtime(event.timestamp)),
 		}
+		if isinstance(event.metadata, dict):
+			payload["metadata"] = BackendClient._to_json_safe(event.metadata)
 		return BackendClient._to_json_safe(payload)
 
 	@staticmethod

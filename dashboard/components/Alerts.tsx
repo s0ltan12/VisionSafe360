@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   Filter, 
@@ -22,6 +21,7 @@ import {
 import { Alert as AlertType, Severity, Status, HazardType } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AlertsAPI } from '../api';
+import { a11yClasses } from '../utils/accessibility';
 
 const StatusPill = ({ status }: { status: Status }) => {
   const styles: Record<string, string> = {
@@ -32,7 +32,11 @@ const StatusPill = ({ status }: { status: Status }) => {
   };
   const { t } = useLanguage();
   return (
-    <span className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider ${styles[status] || styles.New}`}>
+    <span 
+      className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider ${styles[status] || styles.New}`}
+      role="img"
+      aria-label={`Status: ${status}`}
+    >
       {t(status.toLowerCase() as any)}
     </span>
   );
@@ -42,7 +46,7 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
   const { t } = useLanguage();
   
   return (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-label={`Alert details: ${alert.id}`}>
     <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
       <div className="h-16 px-6 border-b border-zinc-800 flex justify-between items-center bg-[#0f0f11] flex-shrink-0">
         <div className="flex items-center space-x-4 rtl:space-x-reverse">
@@ -52,8 +56,10 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
           <StatusPill status={alert.status} />
         </div>
         <div className="flex items-center space-x-2 rtl:space-x-reverse">
-           <button className="p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors" onClick={() => {
-             const csvContent = `ID,Type,Severity,Zone,Camera,Time,Status,Description\n"${alert.id}","${alert.type}","${alert.severity}","${alert.zone}","${alert.camera}","${alert.timestamp}","${alert.status}","${alert.description}"`;
+           <button 
+             className={`p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors ${a11yClasses.focusRing}`}
+             onClick={() => {
+             const csvContent = `ID,Type,Severity,Zone,Camera,CameraID,CameraName,WorkerID,WorkerGPU,Time,Status,Description\n"${alert.id}","${alert.type}","${alert.severity}","${alert.zone}","${alert.camera}","${alert.cameraId || ''}","${alert.cameraName || ''}","${alert.workerId || ''}","${alert.workerGpuId || ''}","${alert.timestamp}","${alert.status}","${alert.description}"`;
              const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
              const link = document.createElement('a');
              link.href = URL.createObjectURL(blob);
@@ -62,21 +68,34 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
              link.click();
              document.body.removeChild(link);
              URL.revokeObjectURL(link.href);
-           }}><Download size={18} /></button>
-           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors"><X size={20} /></button>
+           }}
+           aria-label="Download alert details as CSV"
+           >
+             <Download size={18} aria-hidden="true" />
+           </button>
+           <button 
+             onClick={onClose}
+             className={`p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors ${a11yClasses.focusRing}`}
+             aria-label="Close alert details"
+           >
+             <X size={20} aria-hidden="true" />
+           </button>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col bg-black p-6 overflow-y-auto">
              <div className="relative aspect-video bg-zinc-900 rounded-lg overflow-hidden border border-zinc-800 mb-4 group shadow-2xl">
-               <img src={alert.thumbnail} alt="Evidence" className="w-full h-full object-cover opacity-90" />
+               <img 
+                 src={alert.thumbnail} 
+                 alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
+                 className="w-full h-full object-cover opacity-90" 
+               />
                <div className="absolute top-4 start-4 bg-black/70 backdrop-blur px-3 py-1.5 rounded border border-white/10 flex items-center space-x-2 rtl:space-x-reverse">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
                   <span className="text-white text-xs font-mono uppercase tracking-tighter">Event Capture • {alert.timestamp}</span>
                </div>
                
-               {/* Realistic Bounding Box Simulation */}
                <div className="absolute inset-0 pointer-events-none">
                   <div className="absolute top-1/4 left-1/3 w-32 h-48 border-2 border-vs-orange/80 shadow-[0_0_15px_rgba(255,106,0,0.5)]">
                      <div className="bg-vs-orange text-black text-[9px] font-bold px-1.5 py-0.5 absolute -top-5 left-0">Violation: {alert.type} {alert.confidence}%</div>
@@ -85,14 +104,14 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
              </div>
              <div className="grid grid-cols-2 gap-4">
                 <div className="bg-[#0f0f11] border border-zinc-800 rounded p-4 flex items-start space-x-3 rtl:space-x-reverse">
-                   <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 text-blue-500"><AlertOctagon size={18} /></div>
+                   <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 text-blue-500"><AlertOctagon size={18} aria-hidden="true" /></div>
                    <div className="flex-1">
                       <h4 className="text-[10px] font-bold text-zinc-500 uppercase mb-2">AI Analysis Engine</h4>
                       <p className="text-sm text-zinc-200">{alert.description}</p>
                    </div>
                 </div>
                 <div className="bg-[#0f0f11] border border-zinc-800 rounded p-4 flex items-start space-x-3 rtl:space-x-reverse">
-                   <div className="p-2 bg-vs-orange/10 rounded border border-vs-orange/20 text-vs-orange"><MapPin size={18} /></div>
+                   <div className="p-2 bg-vs-orange/10 rounded border border-vs-orange/20 text-vs-orange"><MapPin size={18} aria-hidden="true" /></div>
                    <div className="flex-1">
                       <h4 className="text-[10px] font-bold text-zinc-500 uppercase mb-2">Geolocation Data</h4>
                       <p className="text-sm text-zinc-200">{alert.zone}</p>
@@ -104,19 +123,31 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
            <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-6 opacity-60">System Actions</h3>
            <div className="space-y-3">
               {alert.status === 'New' && (
-                <button className="w-full py-3 bg-vs-orange hover:bg-vs-lightOrange text-black font-bold rounded text-xs uppercase tracking-widest transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse" onClick={onAcknowledge}>
-                   <CheckCircle size={16} />
+                <button 
+                  className={`w-full py-3 bg-vs-orange hover:bg-vs-lightOrange text-black font-bold rounded text-xs uppercase tracking-widest transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
+                  onClick={onAcknowledge}
+                  aria-label="Acknowledge this alert"
+                >
+                   <CheckCircle size={16} aria-hidden="true" />
                    <span>{t('acknowledge')}</span>
                 </button>
               )}
               {(alert.status === 'New' || alert.status === 'Acknowledged') && (
-                <button className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs uppercase tracking-widest transition-all flex items-center justify-center space-x-2 rtl:space-x-reverse" onClick={onResolve}>
-                   <CheckCircle size={16} />
+                <button 
+                  className={`w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs uppercase tracking-widest transition-all flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
+                  onClick={onResolve}
+                  aria-label="Resolve this alert"
+                >
+                   <CheckCircle size={16} aria-hidden="true" />
                    <span>{t('resolve')}</span>
                 </button>
               )}
-              <button className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded text-xs uppercase tracking-widest transition-all border border-zinc-700 flex items-center justify-center space-x-2 rtl:space-x-reverse" onClick={onEscalate}>
-                 <FileText size={16} />
+              <button 
+                className={`w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded text-xs uppercase tracking-widest transition-all border border-zinc-700 flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
+                onClick={onEscalate}
+                aria-label="Escalate this alert"
+              >
+                 <FileText size={16} aria-hidden="true" />
                  <span>{t('escalate')}</span>
               </button>
            </div>
@@ -126,6 +157,10 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
               <div className="space-y-2 text-[11px] font-mono text-zinc-500">
                  <div className="flex justify-between"><span>Frame ID:</span><span className="text-zinc-300">FR-{Math.floor(Math.random() * 99999)}-X</span></div>
                  <div className="flex justify-between"><span>Camera:</span><span className="text-zinc-300">{alert.camera}</span></div>
+                 <div className="flex justify-between"><span>Camera ID:</span><span className="text-zinc-300">{alert.cameraId || '—'}</span></div>
+                 <div className="flex justify-between"><span>Camera Name:</span><span className="text-zinc-300">{alert.cameraName || '—'}</span></div>
+                 <div className="flex justify-between"><span>Worker ID:</span><span className="text-zinc-300">{alert.workerId || '—'}</span></div>
+                 <div className="flex justify-between"><span>Worker GPU:</span><span className="text-zinc-300">{alert.workerGpuId || '—'}</span></div>
                  <div className="flex justify-between"><span>Resolution:</span><span className="text-zinc-300">1920x1080</span></div>
                  <div className="flex justify-between"><span>Confidence:</span><span className="text-zinc-300">{alert.confidence}%</span></div>
               </div>
@@ -149,223 +184,249 @@ const Alerts = () => {
 
   const fetchAlerts = useCallback(async () => {
     try {
-      setLoading(true);
       const data = await AlertsAPI.getAll();
       setAlerts(data);
-    } catch (err) {
-      console.error('Failed to fetch alerts:', err);
+    } catch (e) {
+      console.error('Failed to fetch alerts:', e);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
+  useEffect(() => {
+    fetchAlerts();
+  }, [fetchAlerts]);
 
   const filteredAlerts = useMemo(() => {
-    return alerts.filter(alert => {
-      const matchesSearch = searchQuery === '' ||
-        alert.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        alert.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        alert.zone.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        alert.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        alert.camera.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchesSeverity = severityFilter === 'all' || alert.severity === severityFilter;
-      const matchesType = typeFilter === 'all' || alert.type === typeFilter;
-      
-      return matchesSearch && matchesSeverity && matchesType;
-    });
+    let result = alerts;
+
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(alert =>
+        alert.id.toLowerCase().includes(query) ||
+        alert.type.toLowerCase().includes(query) ||
+        alert.zone.toLowerCase().includes(query)
+      );
+    }
+
+    if (severityFilter !== 'all') {
+      result = result.filter(alert => alert.severity.toLowerCase() === severityFilter.toLowerCase());
+    }
+
+    if (typeFilter !== 'all') {
+      result = result.filter(alert => alert.type.toLowerCase() === typeFilter.toLowerCase());
+    }
+
+    return result;
   }, [alerts, searchQuery, severityFilter, typeFilter]);
 
-  const handleAcknowledge = async (alertId: string) => {
-    await AlertsAPI.update(alertId, { status: 'Acknowledged' as Status });
-    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, status: 'Acknowledged' as Status } : a));
-    setSelectedAlert(null);
+  const severityOptions: Severity[] = ['High', 'Medium', 'Low'];
+  const typeOptions: HazardType[] = Array.from(new Set(alerts.map(a => a.type)));
+
+  const handleAcknowledge = () => {
+    if (!selectedAlert) return;
+    setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'Acknowledged' } : a));
+    setSelectedAlert(prev => prev ? { ...prev, status: 'Acknowledged' } : null);
   };
 
-  const handleResolve = async (alertId: string) => {
-    await AlertsAPI.update(alertId, { status: 'Resolved' as Status });
-    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, status: 'Resolved' as Status } : a));
-    setSelectedAlert(null);
+  const handleResolve = () => {
+    if (!selectedAlert) return;
+    setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'Resolved' } : a));
+    setSelectedAlert(prev => prev ? { ...prev, status: 'Resolved' } : null);
   };
 
-  const handleDismiss = async (alertId: string) => {
-    await AlertsAPI.update(alertId, { status: 'Dismissed' as Status });
-    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, status: 'Dismissed' as Status } : a));
+  const handleEscalate = () => {
+    if (!selectedAlert) return;
+    alert(`Escalating alert ${selectedAlert.id} to incident management`);
   };
 
-  const handleDelete = async (alertId: string) => {
-    if (window.confirm(t('confirmDelete'))) {
-      await AlertsAPI.delete(alertId);
-      setAlerts(prev => prev.filter(a => a.id !== alertId));
-    }
+  const handleDelete = (id: string) => {
+    setAlerts(prev => prev.filter(a => a.id !== id));
   };
-
-  const handleExportCSV = () => {
-    const headers = 'ID,Type,Severity,Zone,Camera,Timestamp,Status,Description';
-    const rows = filteredAlerts.map(a => `"${a.id}","${a.type}","${a.severity}","${a.zone}","${a.camera}","${a.timestamp}","${a.status}","${a.description}"`).join('\n');
-    const csvContent = `${headers}\n${rows}`;
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'alerts_export.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
-  };
-
-  const uniqueTypes = [...new Set(alerts.map(a => a.type))];
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto">
+    <div className="flex flex-col h-full">
       {selectedAlert && (
-        <AlertDetails 
-          alert={selectedAlert} 
-          onClose={() => setSelectedAlert(null)} 
-          onAcknowledge={() => handleAcknowledge(selectedAlert.id)}
-          onResolve={() => handleResolve(selectedAlert.id)}
-          onEscalate={() => { setSelectedAlert(null); }}
+        <AlertDetails
+          alert={selectedAlert}
+          onClose={() => setSelectedAlert(null)}
+          onAcknowledge={handleAcknowledge}
+          onResolve={handleResolve}
+          onEscalate={handleEscalate}
         />
       )}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div>
-           <h2 className="text-2xl font-bold text-white">{t('alerts')}</h2>
-           <p className="text-sm text-zinc-500">History of AI-detected safety violations.</p>
+
+      <div className="px-6 pt-6 pb-4 bg-gradient-to-b from-[#050505] to-transparent">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">{t('alerts')}</h2>
+            <p className="text-sm text-zinc-500">{filteredAlerts.length} {t('alerts')} total</p>
+          </div>
+          <div className="text-xs text-zinc-500 font-mono flex items-center space-x-2 rtl:space-x-reverse">
+            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
+            <span>{t('systemActive')}</span>
+          </div>
         </div>
-        <div className="flex space-x-3 rtl:space-x-reverse">
-           <div className="relative group">
-             <Search className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-vs-orange transition-colors" size={16} />
-             <input 
-               type="text" 
-               placeholder={t('searchPlaceholder')} 
-               value={searchQuery}
-               onChange={(e) => setSearchQuery(e.target.value)}
-               className="px-9 py-2 bg-[#0f0f11] border border-zinc-800 rounded text-sm text-white focus:outline-none focus:border-vs-orange transition-colors w-64 shadow-sm placeholder-zinc-600" 
-             />
-             {searchQuery && (
-               <button onClick={() => setSearchQuery('')} className="absolute end-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white">
-                 <X size={14} />
-               </button>
-             )}
-           </div>
-           <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-[#0f0f11] border rounded text-sm font-medium transition-colors ${showFilters ? 'border-vs-orange text-vs-orange' : 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'}`}>
-             <Filter size={16} />
-             <span>{t('filter')}</span>
-             {showFilters ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-           </button>
-           <button onClick={handleExportCSV} className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-vs-orange text-black rounded text-sm font-bold shadow-glow hover:bg-vs-lightOrange transition-colors">
-             <Download size={16} />
-             <span>{t('exportCSV')}</span>
-           </button>
+
+        <div className="flex gap-3 flex-wrap">
+          <div className="flex-1 min-w-[240px] relative">
+            <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" aria-hidden="true" />
+            <input
+              type="text"
+              placeholder={t('search')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={`w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2 text-zinc-200 placeholder-zinc-600 text-sm ${a11yClasses.focusRing}`}
+              aria-label="Search alerts"
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm font-medium text-zinc-400 hover:text-white flex items-center space-x-2 rtl:space-x-reverse transition-colors ${a11yClasses.focusRing}`}
+            aria-expanded={showFilters}
+            aria-controls="filter-panel"
+          >
+            <Filter size={16} aria-hidden="true" />
+            <span>{t('filters')}</span>
+            <ChevronDown size={16} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </button>
         </div>
+
+        {showFilters && (
+          <div id="filter-panel" className="mt-3 p-4 bg-zinc-900 border border-zinc-800 rounded-lg flex gap-4 flex-wrap">
+            <div className="flex-1 min-w-[150px]">
+              <label htmlFor="severity-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Severity</label>
+              <select
+                id="severity-filter"
+                value={severityFilter}
+                onChange={(e) => setSeverityFilter(e.target.value)}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by severity"
+              >
+                <option value="all">All</option>
+                {severityOptions.map(s => (
+                  <option key={s} value={s.toLowerCase()}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1 min-w-[150px]">
+              <label htmlFor="type-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Type</label>
+              <select
+                id="type-filter"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by alert type"
+              >
+                <option value="all">All</option>
+                {typeOptions.map(t => (
+                  <option key={t} value={t.toLowerCase()}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={() => {
+                  setSeverityFilter('all');
+                  setTypeFilter('all');
+                  setSearchQuery('');
+                }}
+                className={`px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs font-medium text-zinc-300 transition-colors ${a11yClasses.focusRing}`}
+                aria-label="Clear all filters"
+              >
+                {t('clearAll')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Filter Panel */}
-      {showFilters && (
-        <div className="bg-[#0f0f11] border border-zinc-800 rounded-lg p-4 flex flex-wrap gap-4 items-center animate-in slide-in-from-top-2 duration-200">
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{t('severity')}</label>
-            <select 
-              value={severityFilter} 
-              onChange={(e) => setSeverityFilter(e.target.value)}
-              className="bg-[#050505] border border-zinc-800 text-zinc-300 text-sm rounded px-3 py-2 focus:outline-none focus:border-vs-orange"
-            >
-              <option value="all">{t('allSeverities')}</option>
-              <option value="High">{t('high')}</option>
-              <option value="Medium">{t('medium')}</option>
-              <option value="Low">{t('low')}</option>
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{t('alertType')}</label>
-            <select 
-              value={typeFilter} 
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="bg-[#050505] border border-zinc-800 text-zinc-300 text-sm rounded px-3 py-2 focus:outline-none focus:border-vs-orange"
-            >
-              <option value="all">{t('allTypes')}</option>
-              {uniqueTypes.map(type => (
-                <option key={type} value={type}>{type}</option>
-              ))}
-            </select>
-          </div>
-          {(severityFilter !== 'all' || typeFilter !== 'all') && (
-            <button 
-              onClick={() => { setSeverityFilter('all'); setTypeFilter('all'); }}
-              className="mt-5 text-xs text-vs-orange hover:text-vs-lightOrange font-medium flex items-center space-x-1"
-            >
-              <X size={12} />
-              <span>Clear Filters</span>
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="bg-[#0f0f11] border border-zinc-800 rounded-lg overflow-hidden shadow-2xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-start text-sm text-zinc-400">
-            <thead className="bg-zinc-900/50 text-zinc-500 uppercase text-[10px] font-bold tracking-wider border-b border-zinc-800">
-              <tr>
-                <th className="px-6 py-4 text-start">{t('id')}</th>
-                <th className="px-6 py-4 text-start">{t('alertType')}</th>
-                <th className="px-6 py-4 text-start">{t('severity')}</th>
-                <th className="px-6 py-4 text-start">{t('location')}</th>
-                <th className="px-6 py-4 text-start">{t('status')}</th>
-                <th className="px-6 py-4 text-end">{t('action')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/50">
-              {filteredAlerts.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-zinc-500">
-                    <div className="flex flex-col items-center space-y-2">
-                      <Search size={32} className="text-zinc-700" />
-                      <p className="text-sm">{t('noResults')}</p>
+      <div className="flex-1 overflow-hidden">
+        <div 
+          className="h-full overflow-y-auto custom-scrollbar"
+          role="region"
+          aria-label="Alerts list"
+          aria-live="polite"
+          aria-atomic="false"
+        >
+          <div className="px-6 py-4 space-y-3">
+            {loading ? (
+              <div className="flex items-center justify-center h-48">
+                <div className="text-center">
+                  <div className="w-8 h-8 border-2 border-vs-orange border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                  <p className="text-zinc-500 text-sm">{t('loading')}...</p>
+                </div>
+              </div>
+            ) : filteredAlerts.length === 0 ? (
+              <div className="text-center py-12">
+                <AlertTriangle size={32} className="mx-auto mb-3 text-zinc-700" aria-hidden="true" />
+                <p className="text-zinc-500 text-sm">{t('noAlerts')}</p>
+              </div>
+            ) : (
+              filteredAlerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="bg-[#0f0f11] border border-zinc-800 rounded-lg p-4 hover:border-zinc-700 transition-colors cursor-pointer group"
+                  onClick={() => setSelectedAlert(alert)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedAlert(alert);
+                    }
+                  }}
+                  aria-label={`Alert: ${alert.type} - ${alert.severity} severity - ${alert.status} status`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3 rtl:space-x-reverse flex-1 min-w-0">
+                      <div className="w-12 h-12 rounded-lg bg-black overflow-hidden border border-zinc-800 flex-shrink-0">
+                        <img 
+                          src={alert.thumbnail} 
+                          alt={`Alert thumbnail: ${alert.type}`}
+                          className="w-full h-full object-cover" 
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-white font-semibold group-hover:text-vs-orange transition-colors truncate">{alert.type}</span>
+                          <StatusPill status={alert.status} />
+                        </div>
+                        <div className="mb-1 flex flex-wrap gap-1 text-[9px] font-mono uppercase tracking-wide text-zinc-500">
+                          {alert.cameraId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Cam {alert.cameraId}</span>}
+                          {alert.workerId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Worker {alert.workerId}</span>}
+                        </div>
+                        <p className="text-xs text-zinc-500 mb-1">{alert.zone} • {alert.timestamp}</p>
+                        <p className="text-sm text-zinc-300 line-clamp-2">{alert.description}</p>
+                      </div>
                     </div>
-                  </td>
-                </tr>
-              ) : (
-                filteredAlerts.map((alert) => (
-                <tr key={alert.id} onClick={() => setSelectedAlert(alert)} className="hover:bg-zinc-900/40 transition-colors cursor-pointer group">
-                  <td className="px-6 py-4 font-mono font-medium text-white group-hover:text-vs-orange transition-colors">{alert.id}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center space-x-3 rtl:space-x-reverse">
-                       <div className="w-12 h-12 rounded bg-black overflow-hidden border border-zinc-800">
-                          <img src={alert.thumbnail} className="w-full h-full object-cover opacity-80" />
-                       </div>
-                       <span className="font-semibold text-zinc-200">{alert.type}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                     <span className={`font-bold text-[10px] uppercase px-2 py-0.5 rounded border ${alert.severity === 'High' ? 'text-red-500 bg-red-500/10 border-red-500/20' : alert.severity === 'Medium' ? 'text-vs-orange bg-vs-orange/10 border-vs-orange/20' : 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20'}`}>
-                        {t(alert.severity.toLowerCase() as any)}
-                     </span>
-                  </td>
-                  <td className="px-6 py-4 text-zinc-300">{alert.zone}</td>
-                  <td className="px-6 py-4"><StatusPill status={alert.status} /></td>
-                  <td className="px-6 py-4 text-end">
-                    <div className="flex items-center justify-end space-x-1 rtl:space-x-reverse">
-                      {alert.status === 'New' && (
-                        <button className="p-1.5 hover:bg-emerald-500/10 rounded text-zinc-500 hover:text-emerald-400 transition-colors" title={t('acknowledge')} onClick={(e) => { e.stopPropagation(); handleAcknowledge(alert.id); }}>
-                          <CheckCircle size={16} />
-                        </button>
-                      )}
-                      {alert.status !== 'Dismissed' && alert.status !== 'Resolved' && (
-                        <button className="p-1.5 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors" title={t('dismissed')} onClick={(e) => { e.stopPropagation(); handleDismiss(alert.id); }}>
-                          <X size={16} />
-                        </button>
-                      )}
-                      <button className="p-1.5 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-colors" title={t('delete')} onClick={(e) => { e.stopPropagation(); handleDelete(alert.id); }}>
-                        <Trash2 size={16} />
+                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                      <div className={`px-2 py-1 rounded text-[10px] uppercase font-bold tracking-wider border ${
+                        alert.severity === 'High' ? 'text-red-500 bg-red-500/10 border-red-500/20' :
+                        alert.severity === 'Medium' ? 'text-vs-orange bg-vs-orange/10 border-vs-orange/20' :
+                        'text-yellow-500 bg-yellow-500/10 border-yellow-500/20'
+                      }`}
+                      role="img"
+                      aria-label={`Severity: ${alert.severity}`}
+                      >
+                        {alert.severity}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(alert.id);
+                        }}
+                        className={`p-1.5 hover:bg-red-500/20 rounded text-zinc-500 hover:text-red-500 transition-colors ${a11yClasses.focusRing}`}
+                        aria-label={`Delete alert ${alert.id}`}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
                       </button>
                     </div>
-                  </td>
-                </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>

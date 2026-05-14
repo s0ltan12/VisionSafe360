@@ -59,6 +59,7 @@ class JobService:
                 "current_job_id": state.get("current_job_id"),
                 "queued": state.get("queued"),
                 "assigned_worker_id": state.get("assigned_worker_id"),
+                "assigned_worker_gpu_id": state.get("assigned_worker_gpu_id"),
                 "worker_queue": state.get("worker_queue"),
             }
 
@@ -73,6 +74,9 @@ class JobService:
                 "started_at": None,
                 "last_error": None,
                 "last_exit_code": None,
+                "assigned_worker_id": None,
+                "assigned_worker_gpu_id": None,
+                "worker_queue": None,
                 "jobs": states,
             }
 
@@ -85,6 +89,9 @@ class JobService:
             "started_at": state.get("started_at"),
             "last_error": state.get("last_error"),
             "last_exit_code": state.get("last_exit_code"),
+            "assigned_worker_id": state.get("assigned_worker_id"),
+            "assigned_worker_gpu_id": state.get("assigned_worker_gpu_id"),
+            "worker_queue": state.get("worker_queue"),
             "jobs": states,
         }
 
@@ -148,9 +155,17 @@ class JobService:
                 raise RuntimeError(f"Worker is already running for camera '{camera_id}'")
 
             resolved_source = self._resolve_source(source_name, camera_id, db)
+            camera_name = camera_id
+            if db is not None:
+                from ..models import Camera as CameraModel
+
+                camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
+                if camera and camera.name:
+                    camera_name = camera.name
 
             selected_worker = select_worker()
             assigned_worker_id = selected_worker.get("worker_id") if selected_worker else None
+            assigned_worker_gpu_id = selected_worker.get("gpu_id") if selected_worker else None
             queue_name = selected_worker.get("queue") if selected_worker else QUEUE_NAME
             queue = get_job_queue(str(queue_name))
             retry_max = int(os.getenv("JOB_RETRY_MAX", "3"))
@@ -162,7 +177,9 @@ class JobService:
                     extra={
                         "event": "worker_selected",
                         "camera_id": camera_id,
+                        "camera_name": camera_name,
                         "worker_id": assigned_worker_id,
+                        "worker_gpu_id": assigned_worker_gpu_id,
                         "worker_queue": queue.name,
                         "worker_capacity": selected_worker.get("capacity"),
                         "worker_load": load,
@@ -175,6 +192,7 @@ class JobService:
                     extra={
                         "event": "worker_unavailable",
                         "camera_id": camera_id,
+                        "camera_name": camera_name,
                         "source_name": resolved_source,
                     },
                 )
@@ -184,9 +202,11 @@ class JobService:
                 kwargs={
                     "source_name": resolved_source,
                     "camera_id": camera_id,
+                    "camera_name": camera_name,
                     "auth_token": auth_token,
                     "is_live_source": _is_live_source(resolved_source),
                     "assigned_worker_id": assigned_worker_id,
+                    "assigned_worker_gpu_id": assigned_worker_gpu_id,
                 },
                 retry=Retry(max=retry_max, interval=retry_schedule),
                 job_timeout=-1,
@@ -207,6 +227,7 @@ class JobService:
                 last_error=None,
                 last_exit_code=None,
                 assigned_worker_id=assigned_worker_id,
+                assigned_worker_gpu_id=assigned_worker_gpu_id,
                 worker_queue=queue.name,
             )
             self._logger.info(
@@ -215,7 +236,10 @@ class JobService:
                     "event": "worker_queued",
                     "source_name": resolved_source,
                     "camera_id": camera_id,
+                    "camera_name": camera_name,
                     "job_id": job.id,
+                    "worker_id": assigned_worker_id,
+                    "worker_gpu_id": assigned_worker_gpu_id,
                 },
             )
             return self.status(camera_id)

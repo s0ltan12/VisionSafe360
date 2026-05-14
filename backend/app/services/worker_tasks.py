@@ -43,9 +43,11 @@ def _is_live_source(source: str) -> bool:
 def run_edge_worker_job(
     source_name: str,
     camera_id: str,
+    camera_name: str | None = None,
     auth_token: str | None = None,
     is_live_source: bool = False,
     assigned_worker_id: str | None = None,
+    assigned_worker_gpu_id: str | None = None,
 ) -> dict[str, object]:
     """Execute heavy edge processing in an async queue worker.
 
@@ -63,8 +65,8 @@ def run_edge_worker_job(
     if is_live_source or _is_live_source(source_name):
         source_arg = source_name
         logger.info(
-            "Starting RTSP/live stream: %s for camera %s",
-            source_name, camera_id,
+            "Starting RTSP/live stream: %s for camera %s name=%s worker=%s gpu=%s",
+            source_name, camera_id, camera_name or camera_id, assigned_worker_id, assigned_worker_gpu_id,
         )
     else:
         # source_name is an absolute path resolved by job_service
@@ -79,8 +81,8 @@ def run_edge_worker_job(
                 raise FileNotFoundError(f"Source file not found: {source_name}")
         source_arg = str(source_path)
         logger.info(
-            "Starting file-based stream: %s for camera %s",
-            source_arg, camera_id,
+            "Starting file-based stream: %s for camera %s name=%s worker=%s gpu=%s",
+            source_arg, camera_id, camera_name or camera_id, assigned_worker_id, assigned_worker_gpu_id,
         )
 
     env = os.environ.copy()
@@ -92,6 +94,11 @@ def run_edge_worker_job(
     # Use the no-auth ingest endpoint instead of /api/incidents (which requires RBAC).
     env["VISIONSAFE_BACKEND_INCIDENTS_PATH"] = "/api/ingest/incident"
     env["VISIONSAFE_BACKEND_SOURCE_ID"] = camera_id
+    env["VISIONSAFE_BACKEND_CAMERA_NAME"] = camera_name or camera_id
+    if assigned_worker_id:
+        env["VISIONSAFE_BACKEND_WORKER_ID"] = assigned_worker_id
+    if assigned_worker_gpu_id:
+        env["VISIONSAFE_BACKEND_WORKER_GPU_ID"] = assigned_worker_gpu_id
     env["VISIONSAFE_LOOP_FILE_SOURCE"] = "true"
     # Increase flush aggressiveness so the offline queue drains quickly.
     env["VISIONSAFE_OFFLINE_FLUSH_INTERVAL_SEC"] = "2"
@@ -141,6 +148,7 @@ def run_edge_worker_job(
                 last_error=None,
                 last_exit_code=None,
                 assigned_worker_id=assigned_worker_id,
+                assigned_worker_gpu_id=assigned_worker_gpu_id,
             )
             logger.info(
                 "queued worker started",
@@ -148,6 +156,9 @@ def run_edge_worker_job(
                     "event": "worker_start",
                     "source_name": source_name,
                     "camera_id": camera_id,
+                    "camera_name": camera_name or camera_id,
+                    "worker_id": assigned_worker_id,
+                    "worker_gpu_id": assigned_worker_gpu_id,
                     "pid": process.pid,
                     "job_id": job_id,
                 },

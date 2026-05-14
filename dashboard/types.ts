@@ -10,6 +10,10 @@ export interface Alert {
   severity: Severity;
   zone: string;
   camera: string;
+  cameraId?: string | null;
+  cameraName?: string | null;
+  workerId?: string | null;
+  workerGpuId?: string | null;
   timestamp: string;
   status: Status;
   description: string;
@@ -35,6 +39,10 @@ export interface Incident {
   zone: string;
   classification: string;
   severity: Severity;
+  cameraId?: string | null;
+  cameraName?: string | null;
+  workerId?: string | null;
+  workerGpuId?: string | null;
   rootCause: string;
   correctiveAction: string;
   createdAt: string;

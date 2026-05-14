@@ -54,6 +54,10 @@ const normalizeIncident = (payload: any): Incident => ({
 	severity: payload?.severity === 'High' || payload?.severity === 'Medium' || payload?.severity === 'Low'
 		? payload.severity
 		: 'Low',
+	cameraId: payload?.camera_id ?? payload?.cameraId ?? null,
+	cameraName: payload?.camera_name ?? payload?.cameraName ?? null,
+	workerId: payload?.worker_id ?? payload?.workerId ?? null,
+	workerGpuId: payload?.worker_gpu_id ?? payload?.workerGpuId ?? null,
 	rootCause: String(payload?.root_cause ?? payload?.rootCause ?? 'Under Investigation'),
 	correctiveAction: String(payload?.corrective_action ?? payload?.correctiveAction ?? 'Pending Review'),
 	createdAt: String(payload?.created_at ?? payload?.createdAt ?? new Date().toISOString()),
@@ -69,6 +73,15 @@ const formatTime = (value: string | null | undefined) => {
 		hour: '2-digit',
 		minute: '2-digit',
 	});
+};
+
+const MetadataPill = ({ label, value }: { label: string; value?: string | null }) => {
+	if (!value) return null;
+	return (
+		<span className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wide text-zinc-400">
+			{label}: {value}
+		</span>
+	);
 };
 
 const StatusBadge = ({
@@ -302,6 +315,11 @@ const IncidentItem: React.FC<{ incident: Incident }> = ({ incident }) => {
 				<span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-wider ${severityStyle[incident.severity] ?? 'border-zinc-700 bg-zinc-800 text-zinc-300'}`}>
 					{t(incident.severity.toLowerCase() as any)}
 				</span>
+			</div>
+			<div className="mt-3 flex flex-wrap gap-2">
+				<MetadataPill label="Camera" value={incident.cameraName ?? incident.cameraId} />
+				<MetadataPill label="Worker" value={incident.workerId} />
+				<MetadataPill label="GPU" value={incident.workerGpuId} />
 			</div>
 			<p className="mt-3 text-xs leading-relaxed text-zinc-400">{incident.rootCause}</p>
 			<p className="mt-2 text-[11px] leading-relaxed text-zinc-500">{incident.correctiveAction}</p>
