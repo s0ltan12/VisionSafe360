@@ -8,12 +8,12 @@ from ...config.database import get_db
 from ...config.settings import settings
 from ...schemas import ErgonomicRecordCreate, ErgonomicRecordOut, PaginatedResponse
 from ...services.ergonomic_service import ErgonomicService
-from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 
 router = APIRouter(
     prefix="/ergonomics",
     tags=["ergonomics"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin", "operator", "viewer"))],
 )
 
 

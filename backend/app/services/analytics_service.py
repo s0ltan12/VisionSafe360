@@ -21,6 +21,8 @@ class AnalyticsService:
         total_incidents = db.query(Incident).count()
         total_users = db.query(User).count()
 
+        trends = AnalyticsService.get_incidents_time_series(db, days=7)
+
         return {
             "total_alerts": total_alerts,
             "active_alerts": active_alerts,
@@ -30,6 +32,7 @@ class AnalyticsService:
             "offline_cameras": total_cameras - online_cameras,
             "total_incidents": total_incidents,
             "total_users": total_users,
+            "trends": trends,
         }
 
     @staticmethod

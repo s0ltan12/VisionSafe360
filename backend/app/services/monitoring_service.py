@@ -1,8 +1,7 @@
-"""Redis-backed runtime metrics with graceful in-process fallback."""
+"""Redis-backed runtime metrics."""
 
 from __future__ import annotations
 
-import threading
 import time
 
 from redis.exceptions import RedisError
@@ -12,15 +11,7 @@ from .redis_client import get_redis_client
 
 class MonitoringService:
 	def __init__(self) -> None:
-		self._lock = threading.Lock()
-
-		# Fallback state when Redis is unavailable.
-		self._fb_ws_active = 0
-		self._fb_ws_total = 0
-		self._fb_incident_times: list[float] = []
-		self._fb_rate_limited_times: list[float] = []
-		self._fb_incident_by_source: dict[str, list[float]] = {}
-		self._fb_rate_limited_by_source: dict[str, list[float]] = {}
+		pass
 
 	@staticmethod
 	def _safe_source(source_id: str) -> str:
@@ -79,17 +70,6 @@ class MonitoringService:
 		pipe.expire(source_set_key, 3600)
 		pipe.execute()
 
-	def _fallback_prune(self, now: float) -> None:
-		cutoff = now - 300.0
-		self._fb_incident_times = [ts for ts in self._fb_incident_times if ts >= cutoff]
-		self._fb_rate_limited_times = [ts for ts in self._fb_rate_limited_times if ts >= cutoff]
-
-		for mapping in (self._fb_incident_by_source, self._fb_rate_limited_by_source):
-			for source in list(mapping.keys()):
-				mapping[source] = [ts for ts in mapping[source] if ts >= cutoff]
-				if not mapping[source]:
-					del mapping[source]
-
 	def ws_connected(self) -> int:
 		try:
 			redis = get_redis_client()
@@ -99,10 +79,7 @@ class MonitoringService:
 			active, _total = pipe.execute()
 			return int(active)
 		except RedisError:
-			with self._lock:
-				self._fb_ws_active += 1
-				self._fb_ws_total += 1
-				return self._fb_ws_active
+			return 0
 
 	def ws_disconnected(self) -> int:
 		try:
@@ -119,9 +96,7 @@ class MonitoringService:
 			value = redis.eval(lua, 1, self._ws_active_key())
 			return int(value)
 		except RedisError:
-			with self._lock:
-				self._fb_ws_active = max(0, self._fb_ws_active - 1)
-				return self._fb_ws_active
+			return 0
 
 	def record_incident(self, source_id: str) -> None:
 		source = self._safe_source(source_id)
@@ -133,11 +108,7 @@ class MonitoringService:
 				source,
 			)
 		except RedisError:
-			now = time.time()
-			with self._lock:
-				self._fb_incident_times.append(now)
-				self._fb_incident_by_source.setdefault(source, []).append(now)
-				self._fallback_prune(now)
+			return
 
 	def record_rate_limited(self, source_id: str) -> None:
 		source = self._safe_source(source_id)
@@ -149,11 +120,7 @@ class MonitoringService:
 				source,
 			)
 		except RedisError:
-			now = time.time()
-			with self._lock:
-				self._fb_rate_limited_times.append(now)
-				self._fb_rate_limited_by_source.setdefault(source, []).append(now)
-				self._fallback_prune(now)
+			return
 
 	def _redis_snapshot(self) -> dict:
 		now_ms = int(time.time() * 1000)
@@ -194,42 +161,20 @@ class MonitoringService:
 			"rate_limited_per_source_last_60s": rate_limited_per_source,
 		}
 
-	def _fallback_snapshot(self) -> dict:
-		now = time.time()
-		with self._lock:
-			self._fallback_prune(now)
-			cutoff = now - 60.0
-
-			incidents_last_60 = sum(1 for ts in self._fb_incident_times if ts >= cutoff)
-			rate_limited_last_60 = sum(1 for ts in self._fb_rate_limited_times if ts >= cutoff)
-
-			incidents_per_source = {
-				source: sum(1 for ts in values if ts >= cutoff)
-				for source, values in self._fb_incident_by_source.items()
-			}
-			rate_limited_per_source = {
-				source: sum(1 for ts in values if ts >= cutoff)
-				for source, values in self._fb_rate_limited_by_source.items()
-			}
-
-			incidents_per_source = {k: v for k, v in incidents_per_source.items() if v > 0}
-			rate_limited_per_source = {k: v for k, v in rate_limited_per_source.items() if v > 0}
-
-			return {
-				"ws_active_connections": self._fb_ws_active,
-				"ws_total_connections": self._fb_ws_total,
-				"incidents_last_60s": incidents_last_60,
-				"incidents_last_300s": len(self._fb_incident_times),
-				"incidents_per_source_last_60s": incidents_per_source,
-				"rate_limited_last_60s": rate_limited_last_60,
-				"rate_limited_per_source_last_60s": rate_limited_per_source,
-			}
-
 	def snapshot(self) -> dict:
 		try:
 			return self._redis_snapshot()
 		except RedisError:
-			return self._fallback_snapshot()
+			return {
+				"redis_available": False,
+				"ws_active_connections": 0,
+				"ws_total_connections": 0,
+				"incidents_last_60s": 0,
+				"incidents_last_300s": 0,
+				"incidents_per_source_last_60s": {},
+				"rate_limited_last_60s": 0,
+				"rate_limited_per_source_last_60s": {},
+			}
 
 
 monitoring_service = MonitoringService()

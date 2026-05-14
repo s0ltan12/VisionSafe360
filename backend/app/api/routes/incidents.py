@@ -18,13 +18,12 @@ from ...services.rate_limit_service import rate_limit_service
 from ...schemas import IncidentCreate, IncidentOut, IncidentUpdate, PaginatedResponse
 from ...services.incident_service import IncidentService
 from ...utils.permissions import require_roles
-from ...utils.security import get_current_user
 from ...models import User
 
 router = APIRouter(
     prefix="/incidents",
     tags=["incidents"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin", "operator", "viewer"))],
 )
 logger = logging.getLogger("visionsafe.incidents")
 

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "visionsafe360_test_backend.db")
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
-os.environ["SECRET_KEY"] = "test-secret-key"
+os.environ["SECRET_KEY"] = "test-secret-key-with-32-characters"
 
 from backend.app import main as app_main
 from backend.app.config.database import Base, SessionLocal, engine
@@ -28,14 +28,14 @@ class BackendAPITestCase(unittest.TestCase):
 					id="1",
 					name="Alex Morgan",
 					email="alex.m@visionsafe.co",
-					password_hash=hash_password("admin"),
+					password_hash=hash_password("Admin123"),
 					role="Admin",
 					status="Active",
 				)
 			)
 			db.commit()
 		cls.client = TestClient(app_main.app)
-		login = cls.client.post("/api/auth/login", json={"email": "alex.m@visionsafe.co", "password": "admin"})
+		login = cls.client.post("/api/auth/login", json={"email": "alex.m@visionsafe.co", "password": "Admin123"})
 		token = login.json()["access_token"]
 		cls.auth_headers = {"Authorization": f"Bearer {token}"}
 
@@ -46,7 +46,7 @@ class BackendAPITestCase(unittest.TestCase):
 			os.remove(TEST_DB_PATH)
 
 	def test_login_and_me(self):
-		response = self.client.post("/api/auth/login", json={"email": "alex.m@visionsafe.co", "password": "admin"})
+		response = self.client.post("/api/auth/login", json={"email": "alex.m@visionsafe.co", "password": "Admin123"})
 		self.assertEqual(response.status_code, 200)
 		payload = response.json()
 		self.assertIn("access_token", payload)
@@ -64,7 +64,7 @@ class BackendAPITestCase(unittest.TestCase):
 				"id": "2",
 				"name": "Sarah Chen",
 				"email": "sarah.c@visionsafe.co",
-				"password": "safety",
+				"password": "Safety123",
 				"role": "Safety Engineer",
 				"status": "Active",
 			},
@@ -78,7 +78,7 @@ class BackendAPITestCase(unittest.TestCase):
 				"id": "3",
 				"name": "Duplicate",
 				"email": "sarah.c@visionsafe.co",
-				"password": "safety",
+				"password": "Safety123",
 				"role": "Safety Engineer",
 				"status": "Active",
 			},

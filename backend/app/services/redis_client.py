@@ -15,8 +15,15 @@ def _to_bool(value: str | None, default: bool = False) -> bool:
 	return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-@lru_cache(maxsize=1)
-def get_redis_client() -> Redis:
+def _db_for_purpose(purpose: str) -> int:
+	specific = os.getenv(f"REDIS_{purpose.upper()}_DB")
+	if specific is not None:
+		return int(specific)
+	return int(os.getenv("REDIS_DB", "1"))
+
+
+@lru_cache(maxsize=8)
+def get_redis_client(purpose: str = "state") -> Redis:
 	"""Create a cached Redis client instance.
 
 	Environment variables:
@@ -28,11 +35,12 @@ def get_redis_client() -> Redis:
 	- REDIS_SOCKET_TIMEOUT (default: 1.0)
 	"""
 
-	host = os.getenv("REDIS_HOST", "localhost")
-	port = int(os.getenv("REDIS_PORT", "6379"))
-	password = os.getenv("REDIS_PASSWORD") or None
-	db = int(os.getenv("REDIS_DB", "0"))
-	ssl = _to_bool(os.getenv("REDIS_SSL"), default=False)
+	prefix = f"REDIS_{purpose.upper()}"
+	host = os.getenv(f"{prefix}_HOST", os.getenv("REDIS_HOST", "localhost"))
+	port = int(os.getenv(f"{prefix}_PORT", os.getenv("REDIS_PORT", "6379")))
+	password = os.getenv(f"{prefix}_PASSWORD", os.getenv("REDIS_PASSWORD", "")) or None
+	db = _db_for_purpose(purpose)
+	ssl = _to_bool(os.getenv(f"{prefix}_SSL", os.getenv("REDIS_SSL")), default=False)
 	socket_timeout = float(os.getenv("REDIS_SOCKET_TIMEOUT", "1.0"))
 
 	return Redis(

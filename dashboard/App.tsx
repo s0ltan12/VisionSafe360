@@ -1,5 +1,4 @@
-
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { 
   LayoutDashboard, 
   Video, 
@@ -18,20 +17,22 @@ import {
   Settings
 } from 'lucide-react';
 import { Page, UserRole } from './types';
-import Dashboard from './components/Dashboard';
-import LiveMonitoring from './components/LiveMonitoring';
-import Alerts from './components/Alerts';
-import Reports from './components/Reports';
-import CameraManagement from './components/CameraManagement';
-import UserManagement from './components/UserManagement';
-import Incidents from './components/Incidents';
-import Ergonomics from './components/Ergonomics';
-import SystemHealth from './components/SystemHealth';
-import Configuration from './components/Configuration';
-import Login from './components/Login';
 import VisionSafeLogo from './components/VisionSafeLogo';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthAPI, setAuthToken } from './api';
+import { a11yClasses } from './utils/accessibility';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const LiveMonitoring = lazy(() => import('./components/LiveMonitoring'));
+const Alerts = lazy(() => import('./components/Alerts'));
+const Reports = lazy(() => import('./components/Reports'));
+const CameraManagement = lazy(() => import('./components/CameraManagement'));
+const UserManagement = lazy(() => import('./components/UserManagement'));
+const Incidents = lazy(() => import('./components/Incidents'));
+const Ergonomics = lazy(() => import('./components/Ergonomics'));
+const SystemHealth = lazy(() => import('./components/SystemHealth'));
+const Configuration = lazy(() => import('./components/Configuration'));
+const Login = lazy(() => import('./components/Login'));
 
 const SidebarItem = ({ 
   icon: Icon, 
@@ -46,13 +47,16 @@ const SidebarItem = ({
 }) => (
   <button
     onClick={onClick}
-    className={`group w-full flex items-center space-x-3 rtl:space-x-reverse px-4 py-3 transition-all duration-200 border-s-2 mb-1 ${
+    role="menuitem"
+    aria-current={isActive ? 'page' : undefined}
+    aria-label={`${label}${isActive ? ', current page' : ''}`}
+    className={`group w-full flex items-center space-x-3 rtl:space-x-reverse px-4 py-3 transition-all duration-200 border-s-2 mb-1 ${a11yClasses.focusRing} ${
       isActive 
         ? 'bg-vs-orange/10 text-vs-orange border-vs-orange' 
         : 'border-transparent text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100 hover:border-zinc-700'
     }`}
   >
-    <Icon size={18} className={`transition-colors ${isActive ? 'text-vs-orange' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
+    <Icon size={18} className={`transition-colors ${isActive ? 'text-vs-orange' : 'text-zinc-500 group-hover:text-zinc-300'}`} aria-hidden="true" />
     <span className="font-medium text-sm tracking-wide">{label}</span>
   </button>
 );
@@ -65,11 +69,20 @@ interface NotificationItem {
   type: 'alert' | 'system' | 'info';
 }
 
+const PageFallback = () => (
+  <div className="h-full w-full flex items-center justify-center bg-[#050505] text-zinc-300">
+    <div
+      className="w-7 h-7 border-2 border-zinc-700 border-t-vs-orange rounded-full animate-spin"
+      aria-label="Loading view"
+    />
+  </div>
+);
+
 const AppContent = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<{name: string, role: UserRole} | null>(null);
   const [currentPage, setCurrentPage] = useState<Page>(Page.DASHBOARD);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 1024);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const { language, setLanguage, dir, t } = useLanguage();
@@ -190,7 +203,13 @@ const AppContent = () => {
   };
 
   if (isBootstrapping) return null;
-  if (!isAuthenticated) return <Login onLogin={handleLogin} />;
+  if (!isAuthenticated) {
+    return (
+      <Suspense fallback={<PageFallback />}>
+        <Login onLogin={handleLogin} />
+      </Suspense>
+    );
+  }
 
   const isAdmin = currentUser?.role === 'Admin';
   const isSafetyEngineer = currentUser?.role === 'Safety Engineer' || isAdmin;
@@ -211,10 +230,15 @@ const AppContent = () => {
         <div 
           className="fixed inset-0 bg-black/50 z-20 lg:hidden" 
           onClick={() => setIsSidebarOpen(false)}
+          aria-hidden="true"
         />
       )}
 
-      <aside className={`${isSidebarOpen ? 'w-64' : 'w-0 -ms-64'} flex-shrink-0 bg-[#09090b] border-e border-zinc-800 transition-all duration-300 flex flex-col z-30 fixed lg:relative h-full`}>
+      <aside 
+        className={`${isSidebarOpen ? 'w-64' : 'w-0 -ms-64'} flex-shrink-0 bg-[#09090b] border-e border-zinc-800 transition-all duration-300 flex flex-col z-30 fixed lg:relative h-full`}
+        role="navigation"
+        aria-label="Main navigation"
+      >
         <div className="h-16 flex items-center px-5 border-b border-zinc-800 bg-[#09090b]">
           <VisionSafeLogo className="w-8 h-8 me-3" showText={false} />
           <div>
@@ -223,7 +247,7 @@ const AppContent = () => {
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto custom-scrollbar px-2 pt-4">
+        <nav className="flex-1 overflow-y-auto custom-scrollbar px-2 pt-4" role="menu">
           <div className="mb-6">
             <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('monitoring')}</p>
             {isSafetyEngineer && (
@@ -262,7 +286,11 @@ const AppContent = () => {
                 <p className="text-sm font-medium text-zinc-200 truncate">{currentUser?.name}</p>
                 <p className="text-[10px] text-zinc-500 uppercase">{t(currentUser?.role.toLowerCase().replace(/ /g, '') as any)}</p>
               </div>
-              <button onClick={handleLogout} className="text-zinc-500 hover:text-red-500 transition-colors">
+              <button 
+                onClick={handleLogout} 
+                aria-label="Sign out"
+                className={`text-zinc-500 hover:text-red-500 transition-colors ${a11yClasses.focusRing}`}
+              >
                 <LogOut size={18} />
               </button>
            </div>
@@ -272,13 +300,18 @@ const AppContent = () => {
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#050505]">
         <header className="h-16 bg-[#09090b]/90 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-6 z-20">
           <div className="flex items-center">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 -ms-2 rounded-md hover:bg-zinc-800 text-zinc-400 transition-colors me-4">
-              <Menu size={20} />
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+              aria-label={isSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={isSidebarOpen}
+              className={`p-2 -ms-2 rounded-md hover:bg-zinc-800 text-zinc-400 transition-colors me-4 ${a11yClasses.focusRing}`}
+            >
+              <Menu size={20} aria-hidden="true" />
             </button>
             <div className="flex flex-col">
                <h1 className="text-sm font-bold text-white tracking-wide uppercase">{t(currentPage.toLowerCase().replace(/ /g, '') as any)}</h1>
                <div className="flex items-center space-x-2 rtl:space-x-reverse">
-                  <span className="flex h-2 w-2 relative">
+                  <span className="flex h-2 w-2 relative" aria-hidden="true">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                   </span>
@@ -287,20 +320,27 @@ const AppContent = () => {
             </div>
           </div>
           <div className="flex items-center space-x-4 rtl:space-x-reverse">
-            <button onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')} className="flex items-center space-x-1 text-zinc-400 hover:text-white transition-colors border border-zinc-800 px-2 py-1 rounded bg-zinc-900">
-              <Globe size={16} />
+            <button 
+              onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')} 
+              aria-label={`Switch language to ${language === 'en' ? 'Arabic' : 'English'}`}
+              className={`flex items-center space-x-1 text-zinc-400 hover:text-white transition-colors border border-zinc-800 px-2 py-1 rounded bg-zinc-900 ${a11yClasses.focusRing}`}
+            >
+              <Globe size={16} aria-hidden="true" />
               <span className="text-xs font-bold uppercase">{language === 'en' ? 'AR' : 'EN'}</span>
             </button>
 
             {/* Notifications */}
             <div className="relative">
               <button 
-                className="p-2 text-zinc-400 hover:text-vs-orange transition-colors relative" 
+                className={`p-2 text-zinc-400 hover:text-vs-orange transition-colors relative ${a11yClasses.focusRing}`}
                 onClick={() => setShowNotifications(!showNotifications)}
+                aria-label={`Notifications ${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+                aria-expanded={showNotifications}
+                aria-haspopup="true"
               >
-                <Bell size={20} />
+                <Bell size={20} aria-hidden="true" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -end-0.5 min-w-[18px] h-[18px] bg-red-500 rounded-full border-2 border-[#09090b] text-[9px] font-bold text-white flex items-center justify-center px-1">
+                  <span className="absolute -top-0.5 -end-0.5 min-w-[18px] h-[18px] bg-red-500 rounded-full border-2 border-[#09090b] text-[9px] font-bold text-white flex items-center justify-center px-1" aria-atomic="true">
                     {unreadCount}
                   </span>
                 )}
@@ -309,13 +349,26 @@ const AppContent = () => {
               {/* Notification Dropdown */}
               {showNotifications && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-                  <div className="absolute top-12 end-0 w-96 bg-[#0f0f11] border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200">
+                  <div 
+                    className="fixed inset-0 z-40" 
+                    onClick={() => setShowNotifications(false)}
+                    aria-hidden="true"
+                  />
+                  <div 
+                    className="absolute top-12 end-0 w-96 bg-[#0f0f11] border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200"
+                    role="region"
+                    aria-label="Notifications panel"
+                    aria-live="polite"
+                  >
                     <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/30">
                       <h3 className="font-bold text-white text-sm">{t('notifications')}</h3>
                       <div className="flex items-center space-x-3 rtl:space-x-reverse">
                         {unreadCount > 0 && (
-                          <button onClick={markAllRead} className="text-[10px] text-vs-orange hover:text-vs-lightOrange font-bold uppercase tracking-wider">
+                          <button 
+                            onClick={markAllRead} 
+                            className={`text-[10px] text-vs-orange hover:text-vs-lightOrange font-bold uppercase tracking-wider ${a11yClasses.focusRing}`}
+                            aria-label="Mark all notifications as read"
+                          >
                             {t('markAllRead')}
                           </button>
                         )}
@@ -323,7 +376,7 @@ const AppContent = () => {
                     </div>
                     {notifications.length === 0 ? (
                       <div className="p-10 text-center">
-                        <Bell size={32} className="mx-auto mb-3 text-zinc-700" />
+                        <Bell size={32} className="mx-auto mb-3 text-zinc-700" aria-hidden="true" />
                         <p className="text-zinc-500 text-sm">{t('noNotifications')}</p>
                       </div>
                     ) : (
@@ -332,17 +385,19 @@ const AppContent = () => {
                           <div 
                             key={n.id} 
                             className={`p-4 border-b border-zinc-800/50 flex items-start space-x-3 rtl:space-x-reverse hover:bg-zinc-900/40 transition-colors ${!n.read ? 'bg-vs-orange/[0.03]' : ''}`}
+                            role="article"
                           >
-                            <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${!n.read ? notificationTypeIcon(n.type) : 'bg-zinc-700'}`}></div>
+                            <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${!n.read ? notificationTypeIcon(n.type) : 'bg-zinc-700'}`} aria-hidden="true"></div>
                             <div className="flex-1 min-w-0">
                               <p className={`text-sm leading-relaxed ${!n.read ? 'text-zinc-200' : 'text-zinc-400'}`}>{n.message}</p>
                               <p className="text-[10px] text-zinc-600 mt-1 font-mono">{n.time}</p>
                             </div>
                             <button 
-                              onClick={(e) => { e.stopPropagation(); dismissNotification(n.id); }} 
-                              className="text-zinc-700 hover:text-zinc-400 transition-colors flex-shrink-0 mt-1"
+                              onClick={(e) => { e.stopPropagation(); dismissNotification(n.id); }}
+                              aria-label={`Dismiss notification: ${n.message}`}
+                              className={`text-zinc-700 hover:text-zinc-400 transition-colors flex-shrink-0 mt-1 ${a11yClasses.focusRing}`}
                             >
-                              <X size={14} />
+                              <X size={14} aria-hidden="true" />
                             </button>
                           </div>
                         ))}
@@ -354,8 +409,8 @@ const AppContent = () => {
             </div>
           </div>
         </header>
-        <main className="flex-1 overflow-hidden relative">
-          {renderPage()}
+        <main className="flex-1 overflow-hidden relative" role="main">
+          <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
         </main>
       </div>
     </div>

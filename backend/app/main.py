@@ -22,6 +22,7 @@ from .api.routes.media import router as media_router
 from .api.routes.monitoring import router as monitoring_router
 from .api.routes.notifications_route import router as notifications_router
 from .api.routes.incidents import router as incidents_router
+from .api.routes.ingest import router as ingest_router
 from .api.routes.users import router as users_router
 from .api.websocket.ws_handler import router as incidents_ws_router
 from .api.websocket.ws_notifications import router as notifications_ws_router
@@ -119,27 +120,29 @@ def _register_routes() -> None:
     api_v1.include_router(config_router)
     api_v1.include_router(notifications_router)
     api_v1.include_router(edge_config_router)
+    api_v1.include_router(ingest_router)  # internal: edge AI → backend, no auth
     # api_v1.include_router(incidents_ws_router)
     # api_v1.include_router(notifications_ws_router)
     app.include_router(api_v1)
 
-    # # Backward-compatible /api prefix (current dashboard paths)
-    # legacy_api = APIRouter(prefix="/api")
-    # legacy_api.include_router(stats_router)
-    # legacy_api.include_router(alerts_router)
-    # legacy_api.include_router(cameras_router)
-    # legacy_api.include_router(jobs_router)
-    # legacy_api.include_router(media_router)
-    # legacy_api.include_router(monitoring_router)
-    # legacy_api.include_router(incidents_router)
-    # legacy_api.include_router(users_router)
-    # legacy_api.include_router(analytics_router)
-    # legacy_api.include_router(auth_router)
-    # legacy_api.include_router(ergonomics_router)
-    # legacy_api.include_router(config_router)
-    # legacy_api.include_router(notifications_router)
-    # legacy_api.include_router(edge_config_router)
-    # app.include_router(legacy_api)
+    # Backward-compatible /api prefix (current dashboard paths)
+    legacy_api = APIRouter(prefix="/api")
+    legacy_api.include_router(stats_router)
+    legacy_api.include_router(alerts_router)
+    legacy_api.include_router(cameras_router)
+    legacy_api.include_router(jobs_router)
+    legacy_api.include_router(media_router)
+    legacy_api.include_router(monitoring_router)
+    legacy_api.include_router(incidents_router)
+    legacy_api.include_router(users_router)
+    legacy_api.include_router(analytics_router)
+    legacy_api.include_router(auth_router)
+    legacy_api.include_router(ergonomics_router)
+    legacy_api.include_router(config_router)
+    legacy_api.include_router(notifications_router)
+    legacy_api.include_router(edge_config_router)
+    legacy_api.include_router(ingest_router)  # internal: edge AI → backend, no auth
+    app.include_router(legacy_api)
 
     # Non-versioned health + WebSocket endpoints
     app.include_router(health_router)

@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-04T20:30:40.968+03:00",
+  "title": "Design System: VisionSafe 360 Dashboard",
+  "extensions": {
+    "colorMeta": {
+      "signal-orange": {
+        "role": "primary",
+        "displayName": "Signal Orange",
+        "canonical": "#FF6A00",
+        "tonalRamp": [
+          "oklch(35% 0.11 45)",
+          "oklch(42% 0.13 45)",
+          "oklch(50% 0.16 45)",
+          "oklch(58% 0.18 45)",
+          "oklch(66% 0.19 45)",
+          "oklch(74% 0.17 45)",
+          "oklch(84% 0.12 45)",
+          "oklch(93% 0.05 45)"
+        ]
+      },
+      "surface-canvas": {
+        "role": "neutral",
+        "displayName": "Surface Canvas",
+        "canonical": "#050505",
+        "tonalRamp": [
+          "oklch(15% 0.006 40)",
+          "oklch(22% 0.006 40)",
+          "oklch(30% 0.006 40)",
+          "oklch(38% 0.006 40)",
+          "oklch(46% 0.006 40)",
+          "oklch(60% 0.006 40)",
+          "oklch(76% 0.005 40)",
+          "oklch(92% 0.004 40)"
+        ]
+      },
+      "surface-shell": {
+        "role": "neutral",
+        "displayName": "Surface Shell",
+        "canonical": "#09090B",
+        "tonalRamp": [
+          "oklch(14% 0.006 40)",
+          "oklch(20% 0.006 40)",
+          "oklch(28% 0.006 40)",
+          "oklch(36% 0.006 40)",
+          "oklch(45% 0.006 40)",
+          "oklch(58% 0.005 40)",
+          "oklch(74% 0.005 40)",
+          "oklch(90% 0.004 40)"
+        ]
+      },
+      "surface-panel": {
+        "role": "neutral",
+        "displayName": "Surface Panel",
+        "canonical": "#0F0F11",
+        "tonalRamp": [
+          "oklch(17% 0.006 40)",
+          "oklch(24% 0.006 40)",
+          "oklch(32% 0.006 40)",
+          "oklch(40% 0.006 40)",
+          "oklch(48% 0.006 40)",
+          "oklch(62% 0.005 40)",
+          "oklch(78% 0.005 40)",
+          "oklch(93% 0.004 40)"
+        ]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "Primary Text",
+        "canonical": "#E5E5E5",
+        "tonalRamp": [
+          "oklch(20% 0.004 40)",
+          "oklch(30% 0.004 40)",
+          "oklch(42% 0.004 40)",
+          "oklch(55% 0.004 40)",
+          "oklch(66% 0.004 40)",
+          "oklch(76% 0.004 40)",
+          "oklch(86% 0.004 40)",
+          "oklch(95% 0.004 40)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Top-level branded moments and major screen titles."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section-level anchors such as dashboard overview blocks."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card and module headings in dense layouts."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Operational detail text and supporting information."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Status indicators, nav metadata, and compact controls."
+      }
+    },
+    "shadows": [
+      {
+        "name": "signal-glow",
+        "value": "0 0 15px rgba(255, 106, 0, 0.3)",
+        "purpose": "Primary action emphasis."
+      },
+      {
+        "name": "signal-hover",
+        "value": "0 2px 8px rgba(255, 106, 0, 0.2)",
+        "purpose": "Subtle hover confirmation for interactive controls."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Default interaction transitions."
+      },
+      {
+        "name": "duration-fast",
+        "value": "200ms",
+        "purpose": "Hover and state transitions."
+      },
+      {
+        "name": "duration-medium",
+        "value": "300ms",
+        "purpose": "Sidebar and panel transitions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary action trigger with high-visibility signal color.",
+      "html": "<button class=\"ds-btn-primary\">SIGN IN</button>",
+      "css": ".ds-btn-primary{background:#FF6A00;color:#000;border:0;border-radius:12px;padding:14px 16px;font-family:Inter,Vazirmatn,sans-serif;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:background-color 200ms cubic-bezier(0.4,0,0.2,1),box-shadow 200ms cubic-bezier(0.4,0,0.2,1)}.ds-btn-primary:hover{background:#FF8A3A;box-shadow:0 0 15px rgba(255,106,0,.3)}.ds-btn-primary:focus-visible{outline:2px solid #FF8A3A;outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Action Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary utility action for low-priority controls.",
+      "html": "<button class=\"ds-btn-ghost\">VIEW ALL EVENTS</button>",
+      "css": ".ds-btn-ghost{background:#0A0A0A;color:#9CA3AF;border:1px solid #262626;border-radius:8px;padding:8px 12px;font-family:Inter,Vazirmatn,sans-serif;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:color 200ms cubic-bezier(0.4,0,0.2,1),border-color 200ms cubic-bezier(0.4,0,0.2,1)}.ds-btn-ghost:hover{color:#E5E5E5;border-color:#3f3f46}.ds-btn-ghost:focus-visible{outline:2px solid #FF6A00;outline-offset:2px}"
+    },
+    {
+      "name": "Icon Text Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Dark input with clear focus signaling for credential and settings forms.",
+      "html": "<label class=\"ds-input-wrap\"><span class=\"ds-input-label\">USERNAME</span><div class=\"ds-input-row\"><svg class=\"ds-input-icon\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M20 21a8 8 0 0 0-16 0\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"7\" r=\"4\" stroke=\"currentColor\" stroke-width=\"1.8\"/></svg><input class=\"ds-input\" type=\"text\" placeholder=\"e.g. admin or email\" /></div></label>",
+      "css": ".ds-input-wrap{display:flex;flex-direction:column;gap:8px;font-family:Inter,Vazirmatn,sans-serif}.ds-input-label{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#9CA3AF}.ds-input-row{position:relative}.ds-input-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:#52525b}.ds-input{width:100%;background:#0A0A0A;border:1px solid #262626;border-radius:12px;color:#E5E5E5;padding:12px 16px 12px 40px;font-size:14px;line-height:1.5;transition:border-color 200ms cubic-bezier(0.4,0,0.2,1)}.ds-input::placeholder{color:#3f3f46}.ds-input:hover{border-color:#3f3f46}.ds-input:focus-visible{outline:none;border-color:#FF6A00;box-shadow:0 0 0 2px rgba(255,106,0,.2)}"
+    },
+    {
+      "name": "Sidebar Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Primary app-shell nav item with muted default and signal active state.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\"><span class=\"ds-dot\"></span><span>Overview</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-dot\"></span><span>Alerts</span></a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:4px;font-family:Inter,Vazirmatn,sans-serif}.ds-nav-item{display:flex;align-items:center;gap:10px;padding:12px 16px;border-left:2px solid transparent;border-radius:6px;text-decoration:none;color:#9CA3AF;font-size:14px;font-weight:500;transition:color 200ms cubic-bezier(0.4,0,0.2,1),background-color 200ms cubic-bezier(0.4,0,0.2,1),border-color 200ms cubic-bezier(0.4,0,0.2,1)}.ds-nav-item .ds-dot{width:8px;height:8px;border-radius:999px;background:#52525b}.ds-nav-item:hover{background:#18181b;color:#E5E5E5;border-left-color:#3f3f46}.ds-nav-item:hover .ds-dot{background:#9CA3AF}.ds-nav-item-active{background:rgba(255,106,0,.1);color:#FF6A00;border-left-color:#FF6A00}.ds-nav-item-active .ds-dot{background:#FF6A00}.ds-nav-item:focus-visible{outline:2px solid #FF8A3A;outline-offset:2px}"
+    },
+    {
+      "name": "Severity Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "Compact severity label for incident rows and zone cards.",
+      "html": "<span class=\"ds-badge ds-badge-high\">HIGH</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;justify-content:center;border-radius:4px;padding:2px 8px;font-family:Inter,Vazirmatn,sans-serif;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;border:1px solid transparent}.ds-badge-high{color:#EF4444;background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.2)}.ds-badge-medium{color:#FF6A00;background:rgba(255,106,0,.1);border-color:rgba(255,106,0,.2)}.ds-badge-low{color:#EAB308;background:rgba(234,179,8,.1);border-color:rgba(234,179,8,.2)}"
+    },
+    {
+      "name": "Data Panel Card",
+      "kind": "card",
+      "refersTo": "panel-card",
+      "description": "Default container for dashboard modules and data views.",
+      "html": "<section class=\"ds-card\"><h3 class=\"ds-card-title\">Incident Trends</h3><p class=\"ds-card-body\">Live incident movement across monitored zones.</p></section>",
+      "css": ".ds-card{background:#0F0F11;border:1px solid #262626;border-radius:8px;padding:24px;font-family:Inter,Vazirmatn,sans-serif}.ds-card-title{margin:0 0 8px;color:#E5E5E5;font-size:16px;line-height:1.35;font-weight:700}.ds-card-body{margin:0;color:#9CA3AF;font-size:14px;line-height:1.5}.ds-card:hover{border-color:#3f3f46}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Command Center Vigilance",
+    "overview": "This system is designed for sustained operational monitoring under pressure. The visual language prioritizes high legibility, fast scan paths, and immediate state recognition before decorative expression.\n\nThe tone is trustworthy, vigilant, and actionable. Surfaces stay dark and stable so signal colors carry operational meaning, not ornament. The system explicitly rejects flashy neon hacker aesthetics and novelty visuals that distract from incident response.",
+    "keyCharacteristics": [
+      "Dense but controlled information layout with clear hierarchy",
+      "Orange as a deliberate action and attention signal",
+      "Neutral-first framing with restrained emphasis colors",
+      "Strong uppercase labeling for system status and control zones",
+      "State clarity over visual spectacle"
+    ],
+    "rules": [
+      {
+        "name": "The Signal Scarcity Rule",
+        "body": "Signal Orange is reserved for action, active state, and critical focus points. It is never used as decorative fill.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status First Rule",
+        "body": "Label typography must remain compact, uppercase, and high-contrast whenever it communicates state or severity.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat by Default Rule",
+        "body": "Resting states stay flat and tonal. Elevation appears only to confirm interaction or direct action.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep dark neutrals as the dominant surface system (#050505, #0A0A0A, #0F0F11) and reserve bright color for status and action.",
+      "Do use clear severity mapping with redundant cues (color + label + shape).",
+      "Do preserve compact uppercase labels for operational metadata and control groupings.",
+      "Do keep interaction transitions brief and state-focused."
+    ],
+    "donts": [
+      "Don't use flashy neon hacker aesthetics, novelty visual effects, or spectacle-first styling.",
+      "Don't expand accent colors into broad decorative backgrounds that compete with safety signals.",
+      "Don't introduce generic dashboard filler patterns that reduce operational intent.",
+      "Don't rely on color alone for incident severity or system health communication."
+    ]
+  }
+}

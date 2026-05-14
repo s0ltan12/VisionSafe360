@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from ...config.database import get_db
 from ...services.analytics_service import AnalyticsService
-from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 
-router = APIRouter(tags=["analytics"], dependencies=[Depends(get_current_user)])
+router = APIRouter(tags=["analytics"], dependencies=[Depends(require_roles("admin", "operator", "viewer"))])
 
 
 @router.get("/stats")

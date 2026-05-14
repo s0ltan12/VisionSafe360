@@ -10,21 +10,25 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
 from ...utils.security import get_user_from_token
 from ...config.database import get_db
+from ...services.event_bus import NOTIFICATION_CHANNEL, get_event_redis, publish_notification
 
 logger = logging.getLogger("visionsafe.ws.notifications")
 
 
 class NotificationWSManager:
-    """Manages WebSocket connections for real-time notification delivery."""
+    """Per-instance notification fanout backed by Redis Pub/Sub."""
 
     def __init__(self) -> None:
         self._connections: list[WebSocket] = []
         self._lock = asyncio.Lock()
+        self._subscriber_task: asyncio.Task | None = None
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
         async with self._lock:
             self._connections.append(ws)
+            if self._subscriber_task is None or self._subscriber_task.done():
+                self._subscriber_task = asyncio.create_task(self._subscribe())
         logger.debug("notification client connected; total=%d", len(self._connections))
 
     async def disconnect(self, ws: WebSocket) -> None:
@@ -33,7 +37,13 @@ class NotificationWSManager:
         logger.debug("notification client disconnected; total=%d", len(self._connections))
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
-        """Broadcast notification payload to all connected clients."""
+        """Persist and publish notification payload to all backend instances."""
+        try:
+            publish_notification(payload)
+        except Exception:
+            logger.exception("failed to publish notification websocket event")
+
+    async def _broadcast_local(self, payload: dict[str, Any]) -> None:
         message = json.dumps(payload, default=str)
         async with self._lock:
             clients = list(self._connections)
@@ -46,6 +56,34 @@ class NotificationWSManager:
         if dead:
             async with self._lock:
                 self._connections = [c for c in self._connections if c not in dead]
+
+    async def _subscribe(self) -> None:
+        while True:
+            pubsub = None
+            try:
+                redis = get_event_redis()
+                pubsub = redis.pubsub()
+                pubsub.subscribe(NOTIFICATION_CHANNEL)
+                while True:
+                    message = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                    )
+                    if not message:
+                        async with self._lock:
+                            if not self._connections:
+                                return
+                        continue
+                    await self._broadcast_local(json.loads(message["data"]))
+            except Exception:
+                logger.exception("notification websocket Redis subscriber failed")
+                await asyncio.sleep(2)
+            finally:
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
 
 
 notification_ws_manager = NotificationWSManager()

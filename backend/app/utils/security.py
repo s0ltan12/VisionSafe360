@@ -1,10 +1,9 @@
 """Security helpers: JWT, password hashing, RBAC, password validation."""
-from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -47,7 +46,24 @@ ROLE_STORAGE_NAMES = {
 }
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+class OAuth2PasswordBearerWithQuery(OAuth2PasswordBearer):
+    def __init__(self, tokenUrl: str):
+        super().__init__(tokenUrl=tokenUrl, auto_error=False)
+
+    async def __call__(self, request: Request) -> str | None:
+        token = await super().__call__(request)
+        if not token:
+            token = request.query_params.get("token")
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return token
+
+oauth2_scheme = OAuth2PasswordBearerWithQuery(tokenUrl="/api/auth/login")
 
 
 # ── Startup validation ───────────────────────────────────────────────
@@ -128,15 +144,24 @@ def _require_secret_key() -> str:
 def create_access_token(subject: str, role: str | None = None) -> str:
     expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     expires_at = datetime.now(timezone.utc) + expires_delta
-    payload: dict = {"sub": subject, "exp": expires_at}
+    payload: dict = {"sub": subject, "exp": expires_at, "type": "access"}
     if role is not None:
         payload["role"] = normalize_role(role)
     return jwt.encode(payload, _require_secret_key(), algorithm=ALGORITHM)
 
 
-def get_user_from_token(token: str, db: Session) -> User | None:
+def create_refresh_token(subject: str) -> str:
+    expires_delta = timedelta(days=30)
+    expires_at = datetime.now(timezone.utc) + expires_delta
+    payload: dict = {"sub": subject, "exp": expires_at, "type": "refresh"}
+    return jwt.encode(payload, _require_secret_key(), algorithm=ALGORITHM)
+
+
+def get_user_from_token(token: str, db: Session, token_type: str = "access") -> User | None:
     try:
         payload = jwt.decode(token, _require_secret_key(), algorithms=[ALGORITHM])
+        if payload.get("type") != token_type and token_type != "any":
+            return None
         email: str | None = payload.get("sub")
         if email is None:
             return None

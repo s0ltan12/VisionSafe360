@@ -3,19 +3,19 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ...config.database import get_db
 from ...config.settings import settings
 from ...schemas import AlertCreate, AlertOut, AlertUpdate, PaginatedResponse
 from ...services.alert_service import AlertService
-from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 
 router = APIRouter(
     prefix="/alerts",
     tags=["alerts"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin", "operator"))],
 )
 
 

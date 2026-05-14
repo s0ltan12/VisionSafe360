@@ -11,11 +11,14 @@ from ...schemas import LoginRequest, TokenResponse, UserOut
 from ...services.auth_service import AuthService
 from ...services.login_rate_limit_service import login_rate_limit_service
 from ...utils.audit_logger import audit_event, ensure_request_id, get_client_ip_from_request
-from ...utils.security import create_access_token, get_current_user, normalize_role
+from ...utils.security import create_access_token, create_refresh_token, get_current_user, get_user_from_token, normalize_role
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger("visionsafe.auth")
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
@@ -58,6 +61,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     login_rate_limit_service.reset(ip_address)
 
     token = create_access_token(subject=user.email, role=normalize_role(user.role))
+    refresh = create_refresh_token(subject=user.email)
     audit_event(
         "login",
         user_id=user.id,
@@ -66,8 +70,17 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         outcome="success",
         role=normalize_role(user.role),
     )
-    return TokenResponse(access_token=token)
+    return TokenResponse(access_token=token, refresh_token=refresh)
 
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+    user = get_user_from_token(payload.refresh_token, db, token_type="refresh")
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+    
+    token = create_access_token(subject=user.email, role=normalize_role(user.role))
+    new_refresh = create_refresh_token(subject=user.email)
+    return TokenResponse(access_token=token, refresh_token=new_refresh)
 
 @router.get("/me", response_model=UserOut)
 def me(current_user=Depends(get_current_user)):

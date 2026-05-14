@@ -9,6 +9,7 @@ Design:
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import List, Tuple, Any
@@ -88,6 +89,7 @@ class InferenceEngine:
         self._ppe_model = None
         self._ppe_loaded = False
         self._ppe_names = {}
+        self._model_lock = threading.RLock()
 
         # Resolve actual device
         import torch
@@ -113,17 +115,19 @@ class InferenceEngine:
         logger.info("Loading pose model: %s", weights)
 
         try:
-            self._pose_model = YOLO(weights)
+            with self._model_lock:
+                self._pose_model = YOLO(weights)
         except Exception as exc:
             logger.critical("Failed to load pose weights: %s", exc)
             sys.exit(1)
 
         dummy = np.zeros((IMGSZ, IMGSZ, 3), dtype=np.uint8)
         for _ in range(3):
-            self._pose_model.predict(
-                dummy, device=self.device, half=self._use_half,
-                conf=0.9, verbose=False, imgsz=IMGSZ,
-            )
+            with self._model_lock:
+                self._pose_model.predict(
+                    dummy, device=self.device, half=self._use_half,
+                    conf=0.9, verbose=False, imgsz=IMGSZ,
+                )
         self._pose_loaded = True
         logger.info("Pose model ready")
 
@@ -170,7 +174,8 @@ class InferenceEngine:
         logger.info("Loading proximity model from %s: %s", source_label, weights)
 
         try:
-            self._proximity_model = YOLO(weights)
+            with self._model_lock:
+                self._proximity_model = YOLO(weights)
             self._proximity_names = {
                 int(k): str(v).strip().lower()
                 for k, v in getattr(self._proximity_model, "names", {}).items()
@@ -227,7 +232,8 @@ class InferenceEngine:
         logger.info("Loading PPE model from %s: %s", source_label, weights)
 
         try:
-            self._ppe_model = YOLO(weights)
+            with self._model_lock:
+                self._ppe_model = YOLO(weights)
             self._ppe_names = {
                 int(k): str(v).strip().lower()
                 for k, v in getattr(self._ppe_model, "names", {}).items()
@@ -255,18 +261,19 @@ class InferenceEngine:
         t0 = time.perf_counter()
 
         tracker_cfg = str(_CUSTOM_TRACKER_CFG) if _CUSTOM_TRACKER_CFG.exists() else "bytetrack.yaml"
-        results = self._pose_model.track(
-            bundle.frame,
-            device=self.device,
-            half=self._use_half,
-            imgsz=IMGSZ,
-            conf=CONF_THRESHOLD,
-            iou=IOU_THRESHOLD,
-            max_det=MAX_DET,
-            tracker=tracker_cfg,
-            persist=True,
-            verbose=False,
-        )[0]
+        with self._model_lock:
+            results = self._pose_model.track(
+                bundle.frame,
+                device=self.device,
+                half=self._use_half,
+                imgsz=IMGSZ,
+                conf=CONF_THRESHOLD,
+                iou=IOU_THRESHOLD,
+                max_det=MAX_DET,
+                tracker=tracker_cfg,
+                persist=True,
+                verbose=False,
+            )[0]
 
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -291,14 +298,15 @@ class InferenceEngine:
         """Run pose model (predict only, no tracking).  Returns (raw Results, latency_ms)."""
         assert self._pose_loaded, "Call load_pose() first"
         t0 = time.perf_counter()
-        results = self._pose_model.predict(
-            bundle.frame,
-            device=self.device,
-            half=self._use_half,
-            imgsz=IMGSZ,
-            conf=0.40,
-            verbose=False,
-        )[0]
+        with self._model_lock:
+            results = self._pose_model.predict(
+                bundle.frame,
+                device=self.device,
+                half=self._use_half,
+                imgsz=IMGSZ,
+                conf=0.40,
+                verbose=False,
+            )[0]
         latency_ms = (time.perf_counter() - t0) * 1000.0
         return results, latency_ms
 
@@ -308,16 +316,17 @@ class InferenceEngine:
             return [], 0.0
 
         t0 = time.perf_counter()
-        results = self._proximity_model.predict(
-            bundle.frame,
-            device=self.device,
-            half=self._use_half,
-            imgsz=IMGSZ,
-            conf=PROXIMITY_CONF_THRESHOLD,
-            iou=PROXIMITY_IOU_THRESHOLD,
-            max_det=PROXIMITY_MAX_DET,
-            verbose=False,
-        )[0]
+        with self._model_lock:
+            results = self._proximity_model.predict(
+                bundle.frame,
+                device=self.device,
+                half=self._use_half,
+                imgsz=IMGSZ,
+                conf=PROXIMITY_CONF_THRESHOLD,
+                iou=PROXIMITY_IOU_THRESHOLD,
+                max_det=PROXIMITY_MAX_DET,
+                verbose=False,
+            )[0]
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
         detections: List[Detection] = []
@@ -353,16 +362,17 @@ class InferenceEngine:
             return [], 0.0
 
         t0 = time.perf_counter()
-        results = self._ppe_model.predict(
-            bundle.frame,
-            device=self.device,
-            half=self._use_half,
-            imgsz=IMGSZ,
-            conf=PPE_CONF_THRESHOLD,
-            iou=PPE_IOU_THRESHOLD,
-            max_det=PPE_MAX_DET,
-            verbose=False,
-        )[0]
+        with self._model_lock:
+            results = self._ppe_model.predict(
+                bundle.frame,
+                device=self.device,
+                half=self._use_half,
+                imgsz=IMGSZ,
+                conf=PPE_CONF_THRESHOLD,
+                iou=PPE_IOU_THRESHOLD,
+                max_det=PPE_MAX_DET,
+                verbose=False,
+            )[0]
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
         detections: List[Detection] = []
@@ -430,18 +440,19 @@ class InferenceEngine:
 
         t0 = time.perf_counter()
         tracker_cfg = str(_CUSTOM_TRACKER_CFG) if _CUSTOM_TRACKER_CFG.exists() else "bytetrack.yaml"
-        results = self._ppe_model.track(
-            bundle.frame,
-            device=self.device,
-            half=self._use_half,
-            imgsz=IMGSZ,
-            conf=PPE_CONF_THRESHOLD,
-            iou=PPE_IOU_THRESHOLD,
-            max_det=PPE_MAX_DET,
-            tracker=tracker_cfg,
-            persist=True,
-            verbose=False,
-        )[0]
+        with self._model_lock:
+            results = self._ppe_model.track(
+                bundle.frame,
+                device=self.device,
+                half=self._use_half,
+                imgsz=IMGSZ,
+                conf=PPE_CONF_THRESHOLD,
+                iou=PPE_IOU_THRESHOLD,
+                max_det=PPE_MAX_DET,
+                tracker=tracker_cfg,
+                persist=True,
+                verbose=False,
+            )[0]
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
         detections: List[Detection] = []

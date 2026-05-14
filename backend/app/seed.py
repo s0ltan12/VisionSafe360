@@ -21,6 +21,18 @@ def seed() -> None:
     print("[seed] Seeding database...")
     Base.metadata.create_all(bind=engine)
 
+    # ── Safe migration: add stream_url column if it doesn't exist ──────
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS stream_url VARCHAR(512)"
+            ))
+            conn.commit()
+        print("[seed] Migration: stream_url column ensured on cameras table.")
+    except Exception as exc:
+        print(f"[seed] Migration warning (non-fatal): {exc}")
+
     alerts = [
         Alert(
             id="ALT-1023", type="PPE", severity="High", zone="Zone A - Welding",
@@ -55,13 +67,16 @@ def seed() -> None:
     cameras = [
         Camera(id="CAM-01", name="Main Production Floor", zone="Zone A", status="Online",
                is_privacy_mode=False, thumbnail="https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=800",
-               fps=30, health=98),
+               fps=30, health=98,
+               stream_url="rtsp://mediamtx:8554/cam_01"),
         Camera(id="CAM-02", name="Warehouse Entrance", zone="Zone B", status="Online",
                is_privacy_mode=False, thumbnail="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=800",
-               fps=25, health=94),
+               fps=25, health=94,
+               stream_url="rtsp://mediamtx:8554/cam_02"),
         Camera(id="CAM-03", name="Logistics Dock 04", zone="Zone C", status="Offline",
                is_privacy_mode=True, thumbnail="https://images.unsplash.com/photo-1503694978374-8a2fa686963a?q=80&w=800",
-               fps=0, health=0),
+               fps=0, health=0,
+               stream_url="rtsp://mediamtx:8554/cam_03"),
     ]
 
     incidents = [
@@ -133,6 +148,27 @@ def seed() -> None:
         db.close()
 
     print("[seed] Database seeded successfully!")
+
+    # ── Patch stream_url on existing cameras that are missing it ──────
+    _stream_url_map = {
+        "CAM-01": "rtsp://mediamtx:8554/cam_01",
+        "CAM-02": "rtsp://mediamtx:8554/cam_02",
+        "CAM-03": "rtsp://mediamtx:8554/cam_03",
+    }
+    db2 = SessionLocal()
+    try:
+        for cam_id, stream_url in _stream_url_map.items():
+            cam = db2.query(Camera).filter(Camera.id == cam_id).first()
+            if cam and not cam.stream_url:
+                cam.stream_url = stream_url
+        db2.commit()
+        print("[seed] stream_url patched on existing cameras.")
+    except Exception as exc:
+        db2.rollback()
+        print(f"[seed] stream_url patch warning (non-fatal): {exc}")
+    finally:
+        db2.close()
+
 
 
 if __name__ == "__main__":
