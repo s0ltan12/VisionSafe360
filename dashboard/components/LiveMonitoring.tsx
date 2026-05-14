@@ -7,6 +7,7 @@ import {
 	Grid,
 	Layers,
 	Loader2,
+	Maximize2,
 	Pause,
 	Play,
 	Radio,
@@ -18,6 +19,7 @@ import {
 	Video,
 	Wifi,
 	WifiOff,
+	X,
 } from 'lucide-react';
 import {
 	DemoVideosAPI,
@@ -86,24 +88,14 @@ const StatusBadge = ({
 	);
 };
 
-const withPreviewTimestamp = (url: string, seconds = 1.25) => {
-	if (!url) return '';
-	const [base, fragment = ''] = url.split('#');
-	return `${base}#t=${seconds}${fragment ? `&${fragment}` : ''}`;
-};
-
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
-const isJobForVideo = (status: JobStatus, video: DemoVideo) => {
-	const sourceName = status.sourceName || '';
-	return sourceName === video.fileName || sourceName.endsWith(`/${video.fileName}`) || sourceName.includes(video.fileName);
-};
 
 const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const timeoutRef = useRef<number | null>(null);
 	const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-	const previewSrc = useMemo(() => withPreviewTimestamp(video.streamUrl), [video.streamUrl]);
+	const previewSrc = video.streamUrl;
 
 	const drawPreview = useCallback(() => {
 		const element = videoRef.current;
@@ -115,12 +107,37 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 		canvas.height = element.videoHeight;
 		const context = canvas.getContext('2d');
 		if (!context) return;
-		context.drawImage(element, 0, 0, canvas.width, canvas.height);
-		setState('ready');
+		try {
+			context.drawImage(element, 0, 0, canvas.width, canvas.height);
+			if (timeoutRef.current !== null) {
+				window.clearTimeout(timeoutRef.current);
+				timeoutRef.current = null;
+			}
+			setState('ready');
+		} catch {
+			setState('error');
+		}
 	}, []);
 
 	useEffect(() => {
 		setState('loading');
+		if (timeoutRef.current !== null) {
+			window.clearTimeout(timeoutRef.current);
+		}
+		if (!previewSrc) {
+			setState('error');
+			return undefined;
+		}
+		timeoutRef.current = window.setTimeout(() => {
+			setState((current) => (current === 'ready' ? current : 'error'));
+		}, 7000);
+		window.requestAnimationFrame(() => videoRef.current?.load());
+		return () => {
+			if (timeoutRef.current !== null) {
+				window.clearTimeout(timeoutRef.current);
+				timeoutRef.current = null;
+			}
+		};
 	}, [previewSrc]);
 
 	return (
@@ -133,19 +150,25 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 			<video
 				ref={videoRef}
 				src={previewSrc}
-				className="pointer-events-none absolute h-px w-px opacity-0"
+				className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
 				muted
 				playsInline
-				preload="metadata"
+				preload="auto"
 				onLoadedMetadata={(event) => {
 					const element = event.currentTarget;
 					if (Number.isFinite(element.duration) && element.duration > 0) {
-						element.currentTime = Math.min(1.25, Math.max(0, element.duration * 0.15));
+						const previewTime = Math.min(1.25, Math.max(0.1, element.duration * 0.12));
+						if (Math.abs(element.currentTime - previewTime) > 0.05) {
+							element.currentTime = previewTime;
+						} else {
+							drawPreview();
+						}
 					} else {
 						drawPreview();
 					}
 				}}
 				onLoadedData={drawPreview}
+				onCanPlay={drawPreview}
 				onSeeked={drawPreview}
 				onError={() => setState('error')}
 			/>
@@ -153,7 +176,7 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-950 text-zinc-600">
 					{state === 'loading' ? <Loader2 size={18} className="animate-spin" aria-hidden="true" /> : <Video size={22} aria-hidden="true" />}
 					<span className="px-3 text-center text-[9px] font-bold uppercase tracking-wide text-zinc-500">
-						{video.name}
+						{state === 'loading' ? video.name : 'No preview available'}
 					</span>
 				</div>
 			)}
@@ -250,12 +273,12 @@ const LiveMonitoring = () => {
 	const reconnectAttemptRef = useRef(0);
 	const videoPlayerRef = useRef<HTMLVideoElement>(null);
 	const aiCanvasRef = useRef<HTMLCanvasElement>(null);
+	const fullscreenAiCanvasRef = useRef<HTMLCanvasElement>(null);
 	const aiWsRef = useRef<WebSocket | null>(null);
-	const aiStartAttemptRef = useRef<string | null>(null);
-	const aiTransitionRef = useRef(false);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [isPlaying, setIsPlaying] = useState(true);
 	const [uploadBusy, setUploadBusy] = useState(false);
+	const [isMaximized, setIsMaximized] = useState(false);
 
 	const selectedVideo = useMemo(
 		() => videos.find((video) => video.id === selectedVideoId) ?? videos[0] ?? null,
@@ -342,40 +365,6 @@ const LiveMonitoring = () => {
 		}
 	}, [activeCameraId, jobBusy, selectedVideo, startJobForVideo]);
 
-	const restartAiForVideo = useCallback(async (video: DemoVideo) => {
-		if (aiTransitionRef.current) return;
-		aiTransitionRef.current = true;
-		aiStartAttemptRef.current = video.id;
-		setJobBusy(true);
-		setJobError(null);
-		try {
-			const currentStatus = await JobsAPI.status();
-			setJobStatus(currentStatus);
-			if (currentStatus.running && !isJobForVideo(currentStatus, video)) {
-				setAiState('waiting');
-				const stoppedStatus = await JobsAPI.stop();
-				setJobStatus(stoppedStatus);
-				const stopped = await waitForJobIdle();
-				if (!stopped) {
-					throw new Error('Timed out waiting for the previous AI worker to stop.');
-				}
-			}
-			const latestStatus = await JobsAPI.status();
-			if (!latestStatus.running) {
-				await startJobForVideo(video, 'cam_01');
-			} else if (!isJobForVideo(latestStatus, video)) {
-				throw new Error('AI worker is running a different source. Stop it before starting this source.');
-			} else {
-				setJobStatus(latestStatus);
-			}
-		} catch (error: any) {
-			setJobError(error?.message ?? 'Failed to start AI worker');
-		} finally {
-			setJobBusy(false);
-			aiTransitionRef.current = false;
-		}
-	}, [startJobForVideo, waitForJobIdle]);
-
 	const stopJob = async () => {
 		if (jobBusy) return;
 		setJobBusy(true);
@@ -383,6 +372,10 @@ const LiveMonitoring = () => {
 		try {
 			const status = await JobsAPI.stop();
 			setJobStatus(status);
+			const stopped = await waitForJobIdle();
+			if (!stopped) {
+				setJobError('Stop requested, but the worker is still shutting down.');
+			}
 		} catch (error: any) {
 			setJobError(error?.message ?? 'Failed to stop worker job');
 		} finally {
@@ -430,33 +423,11 @@ const LiveMonitoring = () => {
 
 	const handleModeChange = useCallback((mode: 'file' | 'ai') => {
 		setViewMode(mode);
-		if (mode === 'ai' && selectedVideo) {
-			aiStartAttemptRef.current = null;
-			void restartAiForVideo(selectedVideo);
-		}
-	}, [restartAiForVideo, selectedVideo]);
+	}, []);
 
 	const handleSelectVideo = useCallback((video: DemoVideo) => {
 		setSelectedVideoId(video.id);
-		if (viewMode === 'ai') {
-			void restartAiForVideo(video);
-		}
-	}, [restartAiForVideo, viewMode]);
-
-	useEffect(() => {
-		if (viewMode !== 'ai') {
-			aiStartAttemptRef.current = null;
-			return;
-		}
-		if (!selectedVideo || jobBusy || aiStartAttemptRef.current === selectedVideo.id) {
-			return;
-		}
-		if (jobStatus.running && isJobForVideo(jobStatus, selectedVideo)) {
-			aiStartAttemptRef.current = selectedVideo.id;
-			return;
-		}
-		void restartAiForVideo(selectedVideo);
-	}, [jobBusy, jobStatus, restartAiForVideo, selectedVideo, viewMode]);
+	}, []);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -472,7 +443,9 @@ const LiveMonitoring = () => {
 				setDataError('Failed to load incidents from backend.');
 			}
 		});
-		loadJobStatus({ signal: controller.signal }).catch(() => undefined);
+		JobsAPI.stop()
+			.then((status) => setJobStatus(status))
+			.catch(() => loadJobStatus({ signal: controller.signal }).catch(() => undefined));
 		const timer = window.setInterval(() => {
 			loadJobStatus().catch(() => undefined);
 		}, 5000);
@@ -570,14 +543,15 @@ const LiveMonitoring = () => {
 			const imageUrl = URL.createObjectURL(blob);
 			const image = new Image();
 			image.onload = () => {
-				const canvas = aiCanvasRef.current;
-				const context = canvas?.getContext('2d');
-				if (canvas && context) {
+				const canvases = [aiCanvasRef.current, fullscreenAiCanvasRef.current].filter(Boolean) as HTMLCanvasElement[];
+				for (const canvas of canvases) {
+					const context = canvas.getContext('2d');
+					if (!context) continue;
 					canvas.width = image.width;
 					canvas.height = image.height;
 					context.drawImage(image, 0, 0);
-					setAiState('streaming');
 				}
+				if (canvases.length > 0) setAiState('streaming');
 				URL.revokeObjectURL(imageUrl);
 			};
 			image.onerror = () => URL.revokeObjectURL(imageUrl);
@@ -590,6 +564,15 @@ const LiveMonitoring = () => {
 			aiWsRef.current = null;
 		};
 	}, [activeCameraId, viewMode]);
+
+	useEffect(() => {
+		if (!isMaximized) return undefined;
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') setIsMaximized(false);
+		};
+		window.addEventListener('keydown', handleKeyDown);
+		return () => window.removeEventListener('keydown', handleKeyDown);
+	}, [isMaximized]);
 
 	const showInitialLoading = videosLoading && videos.length === 0;
 
@@ -771,6 +754,18 @@ const LiveMonitoring = () => {
 									<span className="text-[10px] font-mono font-bold uppercase tracking-wider text-white">{t('recording' as any)}</span>
 								</div>
 							</div>
+
+							{selectedVideo && (
+								<button
+									type="button"
+									onClick={() => setIsMaximized(true)}
+									className="absolute left-4 top-4 flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-black/65 text-zinc-300 transition-colors hover:border-vs-orange/50 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange"
+									aria-label="Maximize video preview"
+									title="Maximize"
+								>
+									<Maximize2 size={16} aria-hidden="true" />
+								</button>
+							)}
 						</div>
 
 						<div className="border-t border-zinc-800 bg-zinc-900/30 p-4">
@@ -847,6 +842,65 @@ const LiveMonitoring = () => {
 					</div>
 				</div>
 			</div>
+			{isMaximized && selectedVideo && (
+				<div
+					className="fixed inset-0 z-50 flex bg-zinc-950/95 p-3 backdrop-blur-sm sm:p-5"
+					role="dialog"
+					aria-modal="true"
+					aria-label="Maximized live monitoring preview"
+				>
+					<div className="relative flex min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-2xl">
+						{viewMode === 'file' ? (
+							<video
+								key={`fullscreen-${selectedVideo.streamUrl}`}
+								src={selectedVideo.streamUrl}
+								className="h-full w-full object-contain"
+								autoPlay
+								muted
+								loop
+								playsInline
+								controls
+								preload="metadata"
+								onError={() => setJobError('Unable to load this video source in fullscreen view.')}
+							/>
+						) : (
+							<div className="relative h-full w-full">
+								<canvas ref={fullscreenAiCanvasRef} className="h-full w-full object-contain" aria-label="Maximized AI annotated stream" />
+								{aiState !== 'streaming' && (
+									<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/75 p-6 text-center text-zinc-400">
+										<Cpu size={42} className={aiState === 'connecting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
+										<p className="text-sm font-bold text-white">
+											{jobStatus.running ? t('waitingForFrames' as any) : t('startWorkerForAi' as any)}
+										</p>
+									</div>
+								)}
+							</div>
+						)}
+
+						<div className="absolute left-4 top-4 flex items-center gap-2 rounded-md border border-white/10 bg-black/70 px-3 py-1.5">
+							<div className={`h-2 w-2 rounded-full ${jobStatus.running ? 'animate-pulse bg-emerald-500' : 'bg-zinc-600'}`} />
+							<span className="text-[10px] font-mono font-bold uppercase tracking-wider text-white">
+								{viewMode === 'ai' ? 'AI' : t('file' as any)} • {selectedVideo.name}
+							</span>
+						</div>
+						<div className="absolute right-4 top-4 flex items-center gap-2">
+							<div className="hidden items-center gap-2 rounded-md border border-white/10 bg-black/70 px-3 py-1.5 sm:flex">
+								<div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+								<span className="text-[10px] font-mono font-bold uppercase tracking-wider text-white">{t('recording' as any)}</span>
+							</div>
+							<button
+								type="button"
+								onClick={() => setIsMaximized(false)}
+								className="flex h-10 w-10 items-center justify-center rounded-md border border-white/10 bg-black/70 text-zinc-300 transition-colors hover:border-vs-orange/50 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange"
+								aria-label="Close maximized preview"
+								title="Close"
+							>
+								<X size={18} aria-hidden="true" />
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 };
