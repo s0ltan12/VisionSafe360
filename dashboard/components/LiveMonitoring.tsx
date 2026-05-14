@@ -92,6 +92,13 @@ const withPreviewTimestamp = (url: string, seconds = 1.25) => {
 	return `${base}#t=${seconds}${fragment ? `&${fragment}` : ''}`;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const isJobForVideo = (status: JobStatus, video: DemoVideo) => {
+	const sourceName = status.sourceName || '';
+	return sourceName === video.fileName || sourceName.endsWith(`/${video.fileName}`) || sourceName.includes(video.fileName);
+};
+
 const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -245,6 +252,7 @@ const LiveMonitoring = () => {
 	const aiCanvasRef = useRef<HTMLCanvasElement>(null);
 	const aiWsRef = useRef<WebSocket | null>(null);
 	const aiStartAttemptRef = useRef<string | null>(null);
+	const aiTransitionRef = useRef(false);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [isPlaying, setIsPlaying] = useState(true);
 	const [uploadBusy, setUploadBusy] = useState(false);
@@ -303,19 +311,70 @@ const LiveMonitoring = () => {
 		setJobStatus(status);
 	}, []);
 
+	const waitForJobIdle = useCallback(async (timeoutMs = 30000) => {
+		const deadline = Date.now() + timeoutMs;
+		let latestStatus = await JobsAPI.status();
+		while (latestStatus.running && Date.now() < deadline) {
+			await sleep(750);
+			latestStatus = await JobsAPI.status();
+		}
+		setJobStatus(latestStatus);
+		return !latestStatus.running;
+	}, []);
+
+	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = 'cam_01') => {
+		const status = await JobsAPI.start(video.fileName, cameraId);
+		setJobStatus(status);
+		setJobError(null);
+		return status;
+	}, []);
+
 	const startJob = useCallback(async () => {
 		if (!selectedVideo || jobBusy) return;
 		setJobBusy(true);
 		setJobError(null);
 		try {
-			const status = await JobsAPI.start(selectedVideo.fileName, activeCameraId);
-			setJobStatus(status);
+			await startJobForVideo(selectedVideo, activeCameraId);
 		} catch (error: any) {
 			setJobError(error?.message ?? 'Failed to start worker job');
 		} finally {
 			setJobBusy(false);
 		}
-	}, [activeCameraId, jobBusy, selectedVideo]);
+	}, [activeCameraId, jobBusy, selectedVideo, startJobForVideo]);
+
+	const restartAiForVideo = useCallback(async (video: DemoVideo) => {
+		if (aiTransitionRef.current) return;
+		aiTransitionRef.current = true;
+		aiStartAttemptRef.current = video.id;
+		setJobBusy(true);
+		setJobError(null);
+		try {
+			const currentStatus = await JobsAPI.status();
+			setJobStatus(currentStatus);
+			if (currentStatus.running && !isJobForVideo(currentStatus, video)) {
+				setAiState('waiting');
+				const stoppedStatus = await JobsAPI.stop();
+				setJobStatus(stoppedStatus);
+				const stopped = await waitForJobIdle();
+				if (!stopped) {
+					throw new Error('Timed out waiting for the previous AI worker to stop.');
+				}
+			}
+			const latestStatus = await JobsAPI.status();
+			if (!latestStatus.running) {
+				await startJobForVideo(video, 'cam_01');
+			} else if (!isJobForVideo(latestStatus, video)) {
+				throw new Error('AI worker is running a different source. Stop it before starting this source.');
+			} else {
+				setJobStatus(latestStatus);
+			}
+		} catch (error: any) {
+			setJobError(error?.message ?? 'Failed to start AI worker');
+		} finally {
+			setJobBusy(false);
+			aiTransitionRef.current = false;
+		}
+	}, [startJobForVideo, waitForJobIdle]);
 
 	const stopJob = async () => {
 		if (jobBusy) return;
@@ -369,19 +428,35 @@ const LiveMonitoring = () => {
 		}
 	};
 
+	const handleModeChange = useCallback((mode: 'file' | 'ai') => {
+		setViewMode(mode);
+		if (mode === 'ai' && selectedVideo) {
+			aiStartAttemptRef.current = null;
+			void restartAiForVideo(selectedVideo);
+		}
+	}, [restartAiForVideo, selectedVideo]);
+
+	const handleSelectVideo = useCallback((video: DemoVideo) => {
+		setSelectedVideoId(video.id);
+		if (viewMode === 'ai') {
+			void restartAiForVideo(video);
+		}
+	}, [restartAiForVideo, viewMode]);
+
 	useEffect(() => {
 		if (viewMode !== 'ai') {
 			aiStartAttemptRef.current = null;
 			return;
 		}
-		if (!selectedVideo || jobStatus.running || jobBusy || aiStartAttemptRef.current === selectedVideo.id) {
+		if (!selectedVideo || jobBusy || aiStartAttemptRef.current === selectedVideo.id) {
 			return;
 		}
-		aiStartAttemptRef.current = selectedVideo.id;
-		startJob().catch((error: any) => {
-			setJobError(error?.message ?? 'Failed to start AI worker');
-		});
-	}, [jobBusy, jobStatus.running, selectedVideo, startJob, viewMode]);
+		if (jobStatus.running && isJobForVideo(jobStatus, selectedVideo)) {
+			aiStartAttemptRef.current = selectedVideo.id;
+			return;
+		}
+		void restartAiForVideo(selectedVideo);
+	}, [jobBusy, jobStatus, restartAiForVideo, selectedVideo, viewMode]);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -601,7 +676,7 @@ const LiveMonitoring = () => {
 											type="button"
 											role="tab"
 											aria-selected={viewMode === mode}
-											onClick={() => setViewMode(mode)}
+											onClick={() => handleModeChange(mode)}
 											className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
 												viewMode === mode ? 'bg-vs-orange text-black' : 'text-zinc-500 hover:text-zinc-300'
 											}`}
@@ -712,7 +787,7 @@ const LiveMonitoring = () => {
 											key={video.id}
 											video={video}
 											isActive={video.id === selectedVideo?.id}
-											onClick={() => setSelectedVideoId(video.id)}
+											onClick={() => handleSelectVideo(video)}
 										/>
 									))}
 								</div>
