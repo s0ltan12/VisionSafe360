@@ -82,6 +82,7 @@ function toFrontendCamera(c: any): Camera {
     name:          c.name,
     zone:          c.zone,
     url:           c.url,
+    stream_url:    c.stream_url,
     status:        c.status,
     isPrivacyMode: c.is_privacy_mode,
     thumbnail:     c.thumbnail,
@@ -221,6 +222,12 @@ export const CamerasAPI = {
 
   delete: (id: string) =>
     request<void>(`/api/cameras/${id}`, { method: 'DELETE' }),
+
+  startStream: (id: string) =>
+    request<any>(`/api/cameras/${id}/start`, { method: 'POST' }),
+
+  stopStream: (id: string) =>
+    request<any>(`/api/cameras/${id}/stop`, { method: 'POST' }),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -293,6 +300,7 @@ export const StatsAPI = {
       offline_cameras: number;
       total_incidents: number;
       total_users: number;
+      trends?: Array<{ date: string; count: number }>;
     }>('/api/stats'),
 };
 
