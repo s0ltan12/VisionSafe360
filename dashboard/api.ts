@@ -312,6 +312,9 @@ export const DemoVideosAPI = {
     const data = await request<any[]>('/api/media/videos', options);
     return data.map(toFrontendDemoVideo);
   },
+
+  delete: (fileName: string) =>
+    request<void>(`/api/media/videos/${encodeURIComponent(fileName)}`, { method: 'DELETE' }),
 };
 
 export const JobsAPI = {

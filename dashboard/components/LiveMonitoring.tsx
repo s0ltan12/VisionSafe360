@@ -15,6 +15,7 @@ import {
 	Rewind,
 	ShieldCheck,
 	Square,
+	Trash2,
 	Upload,
 	Video,
 	Wifi,
@@ -188,13 +189,25 @@ const DemoVideoCard: React.FC<{
 	video: DemoVideo;
 	isActive: boolean;
 	onClick: () => void;
-}> = ({ video, isActive, onClick }) => {
+	onDelete: () => void;
+	isDeleting: boolean;
+}> = ({ video, isActive, onClick, onDelete, isDeleting }) => {
 	const { t } = useLanguage();
 	return (
-		<button
-			type="button"
-			onClick={onClick}
+		<div
+			onClick={() => {
+				if (!isDeleting) onClick();
+			}}
+			onKeyDown={(event) => {
+				if (event.key === 'Enter' || event.key === ' ') {
+					event.preventDefault();
+					if (!isDeleting) onClick();
+				}
+			}}
+			role="button"
+			tabIndex={isDeleting ? -1 : 0}
 			aria-pressed={isActive}
+			aria-disabled={isDeleting}
 			className={`group relative min-h-32 overflow-hidden rounded-lg border text-start transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
 				isActive ? 'border-vs-orange shadow-[0_0_0_1px_rgba(249,115,22,0.45)]' : 'border-zinc-800 hover:border-zinc-700'
 			}`}
@@ -212,12 +225,25 @@ const DemoVideoCard: React.FC<{
 						{video.zone}
 					</span>
 				</div>
+				<button
+					type="button"
+					onClick={(event) => {
+						event.stopPropagation();
+						onDelete();
+					}}
+					disabled={isDeleting}
+					className="absolute right-3 top-11 flex h-8 w-8 items-center justify-center rounded-md border border-red-500/20 bg-black/75 text-red-300 opacity-100 transition-colors hover:border-red-400/50 hover:text-red-100 disabled:cursor-wait disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
+					aria-label={`Delete ${video.name}`}
+					title={t('delete' as any)}
+				>
+					{isDeleting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+				</button>
 				<div>
 					<p className="truncate text-sm font-bold text-white">{video.name}</p>
 					<p className="mt-1 line-clamp-2 text-[10px] text-zinc-300">{video.description}</p>
 				</div>
 			</div>
-		</button>
+		</div>
 	);
 };
 
@@ -266,7 +292,7 @@ const LiveMonitoring = () => {
 	const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 	const [dataError, setDataError] = useState<string | null>(null);
 	const [wsState, setWsState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-	const [aiState, setAiState] = useState<'idle' | 'connecting' | 'waiting' | 'streaming' | 'unavailable'>('idle');
+	const [aiState, setAiState] = useState<'stopped' | 'starting' | 'running' | 'no_frames' | 'error'>('stopped');
 
 	const wsRef = useRef<WebSocket | null>(null);
 	const reconnectTimerRef = useRef<number | null>(null);
@@ -276,12 +302,13 @@ const LiveMonitoring = () => {
 	const fullscreenAiCanvasRef = useRef<HTMLCanvasElement>(null);
 	const aiWsRef = useRef<WebSocket | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
-	const [isPlaying, setIsPlaying] = useState(true);
+	const [isPlaying, setIsPlaying] = useState(false);
 	const [uploadBusy, setUploadBusy] = useState(false);
 	const [isMaximized, setIsMaximized] = useState(false);
+	const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
 
 	const selectedVideo = useMemo(
-		() => videos.find((video) => video.id === selectedVideoId) ?? videos[0] ?? null,
+		() => videos.find((video) => video.id === selectedVideoId) ?? null,
 		[videos, selectedVideoId],
 	);
 
@@ -352,32 +379,52 @@ const LiveMonitoring = () => {
 		return status;
 	}, []);
 
-	const startJob = useCallback(async () => {
+	const startMonitoring = useCallback(async () => {
 		if (!selectedVideo || jobBusy) return;
 		setJobBusy(true);
 		setJobError(null);
 		try {
-			await startJobForVideo(selectedVideo, activeCameraId);
+			if (viewMode === 'file') {
+				const player = videoPlayerRef.current;
+				if (!player) return;
+				await player.play();
+				setIsPlaying(true);
+				return;
+			}
+			setAiState('starting');
+			await startJobForVideo(selectedVideo, 'cam_01');
 		} catch (error: any) {
-			setJobError(error?.message ?? 'Failed to start worker job');
+			if (viewMode === 'ai') setAiState('error');
+			setJobError(error?.message ?? (viewMode === 'ai' ? 'Failed to start AI worker' : 'Browser blocked video playback. Press Start again or use a supported browser.'));
 		} finally {
 			setJobBusy(false);
 		}
-	}, [activeCameraId, jobBusy, selectedVideo, startJobForVideo]);
+	}, [jobBusy, selectedVideo, startJobForVideo, viewMode]);
 
-	const stopJob = async () => {
+	const stopMonitoring = async () => {
 		if (jobBusy) return;
 		setJobBusy(true);
 		setJobError(null);
 		try {
-			const status = await JobsAPI.stop();
-			setJobStatus(status);
-			const stopped = await waitForJobIdle();
-			if (!stopped) {
-				setJobError('Stop requested, but the worker is still shutting down.');
+			const player = videoPlayerRef.current;
+			if (player) {
+				player.pause();
+				setIsPlaying(false);
+			}
+			if (viewMode === 'ai') {
+				setAiState('stopped');
+			}
+			if (jobStatus.running) {
+				const status = await JobsAPI.stop();
+				setJobStatus(status);
+				const stopped = await waitForJobIdle();
+				if (!stopped) {
+					setJobError('Stop requested, but the worker is still shutting down.');
+				}
 			}
 		} catch (error: any) {
 			setJobError(error?.message ?? 'Failed to stop worker job');
+			if (viewMode === 'ai') setAiState('error');
 		} finally {
 			setJobBusy(false);
 		}
@@ -387,12 +434,7 @@ const LiveMonitoring = () => {
 		const player = videoPlayerRef.current;
 		if (!player) return;
 		if (player.paused) {
-			try {
-				await player.play();
-				setIsPlaying(true);
-			} catch {
-				setJobError('Browser blocked video playback. Use the video area or controls to start playback.');
-			}
+			setJobError('Press Start to begin file playback.');
 		} else {
 			player.pause();
 			setIsPlaying(false);
@@ -426,8 +468,37 @@ const LiveMonitoring = () => {
 	}, []);
 
 	const handleSelectVideo = useCallback((video: DemoVideo) => {
+		videoPlayerRef.current?.pause();
+		setIsPlaying(false);
 		setSelectedVideoId(video.id);
 	}, []);
+
+	const handleDeleteSource = useCallback(async (video: DemoVideo) => {
+		const confirmed = window.confirm(`Delete source "${video.name}"? This removes it from Available Sources.`);
+		if (!confirmed) return;
+		setDeletingSourceId(video.id);
+		setJobError(null);
+		try {
+			const wasSelected = selectedVideoId === video.id;
+			if (wasSelected) {
+				videoPlayerRef.current?.pause();
+				setIsPlaying(false);
+				setIsMaximized(false);
+				setSelectedVideoId('');
+				if (jobStatus.running) {
+					await JobsAPI.stop();
+					await waitForJobIdle();
+				}
+				setAiState('stopped');
+			}
+			await DemoVideosAPI.delete(video.fileName);
+			setVideos((current) => current.filter((item) => item.id !== video.id));
+		} catch (error: any) {
+			setJobError(error?.message ?? 'Failed to delete video source');
+		} finally {
+			setDeletingSourceId(null);
+		}
+	}, [jobStatus.running, selectedVideoId, waitForJobIdle]);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -514,31 +585,45 @@ const LiveMonitoring = () => {
 	}, [upsertIncident]);
 
 	useEffect(() => {
-		if (viewMode !== 'ai') {
-			setAiState('idle');
+		if (viewMode !== 'ai' || !jobStatus.running) {
+			if (viewMode === 'ai' && !jobBusy) setAiState('stopped');
 			return undefined;
 		}
 
 		const token = getAuthToken();
 		if (!token) {
-			setAiState('unavailable');
+			setAiState('error');
 			return undefined;
 		}
 
 		let stopped = false;
-		setAiState('connecting');
+		let receivedFrame = false;
+		let noFrameTimer: number | null = window.setTimeout(() => {
+			if (!receivedFrame && !stopped) setAiState('no_frames');
+		}, 12000);
+		setAiState('starting');
 		const ws = new WebSocket(getAIStreamUrl(activeCameraId));
 		ws.binaryType = 'arraybuffer';
 		aiWsRef.current = ws;
 
-		ws.onopen = () => setAiState('waiting');
-		ws.onclose = () => {
-			if (!stopped) setAiState('unavailable');
+		ws.onopen = () => {
+			if (!stopped) setAiState('starting');
 		};
-		ws.onerror = () => ws.close();
+		ws.onclose = () => {
+			if (!stopped) setAiState('error');
+		};
+		ws.onerror = () => {
+			setAiState('error');
+			ws.close();
+		};
 		ws.onmessage = (event) => {
 			const frame = event.data instanceof ArrayBuffer ? event.data : null;
 			if (!frame) return;
+			receivedFrame = true;
+			if (noFrameTimer !== null) {
+				window.clearTimeout(noFrameTimer);
+				noFrameTimer = null;
+			}
 			const blob = new Blob([frame], { type: 'image/jpeg' });
 			const imageUrl = URL.createObjectURL(blob);
 			const image = new Image();
@@ -551,7 +636,7 @@ const LiveMonitoring = () => {
 					canvas.height = image.height;
 					context.drawImage(image, 0, 0);
 				}
-				if (canvases.length > 0) setAiState('streaming');
+				if (canvases.length > 0) setAiState('running');
 				URL.revokeObjectURL(imageUrl);
 			};
 			image.onerror = () => URL.revokeObjectURL(imageUrl);
@@ -560,10 +645,14 @@ const LiveMonitoring = () => {
 
 		return () => {
 			stopped = true;
+			if (noFrameTimer !== null) {
+				window.clearTimeout(noFrameTimer);
+				noFrameTimer = null;
+			}
 			ws.close();
 			aiWsRef.current = null;
 		};
-	}, [activeCameraId, viewMode]);
+	}, [activeCameraId, jobBusy, jobStatus.running, viewMode]);
 
 	useEffect(() => {
 		if (!isMaximized) return undefined;
@@ -575,6 +664,15 @@ const LiveMonitoring = () => {
 	}, [isMaximized]);
 
 	const showInitialLoading = videosLoading && videos.length === 0;
+	const aiStateLabel = {
+		stopped: 'AI stopped',
+		starting: 'Starting AI...',
+		running: 'AI running',
+		no_frames: 'No frames received',
+		error: 'AI error',
+	}[aiState];
+	const canStart = Boolean(selectedVideo) && !jobBusy && (viewMode === 'file' ? !isPlaying : !jobStatus.running);
+	const canStop = !jobBusy && (viewMode === 'file' ? isPlaying || jobStatus.running : jobStatus.running || aiState === 'starting' || aiState === 'running' || aiState === 'no_frames');
 
 	return (
 		<div className="flex h-full min-h-0 overflow-hidden bg-[#050505]">
@@ -673,8 +771,8 @@ const LiveMonitoring = () => {
 							<div className="flex flex-wrap items-center gap-2">
 								<button
 									type="button"
-									onClick={startJob}
-									disabled={!selectedVideo || jobStatus.running || jobBusy}
+									onClick={startMonitoring}
+									disabled={!canStart}
 									className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-1.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
 								>
 									{jobBusy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} fill="currentColor" aria-hidden="true" />}
@@ -682,8 +780,8 @@ const LiveMonitoring = () => {
 								</button>
 								<button
 									type="button"
-									onClick={stopJob}
-									disabled={!jobStatus.running || jobBusy}
+									onClick={stopMonitoring}
+									disabled={!canStop}
 									className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-1.5 text-[10px] font-bold uppercase tracking-wide text-red-400 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
 								>
 									<Square size={12} fill="currentColor" aria-hidden="true" />
@@ -705,7 +803,6 @@ const LiveMonitoring = () => {
 										key={selectedVideo.streamUrl}
 										src={selectedVideo.streamUrl}
 										className="h-full w-full object-contain"
-										autoPlay
 										muted
 										loop
 										playsInline
@@ -717,14 +814,14 @@ const LiveMonitoring = () => {
 								) : (
 									<div className="relative h-full w-full">
 										<canvas ref={aiCanvasRef} className="h-full w-full object-contain" aria-label="AI annotated stream" />
-										{aiState !== 'streaming' && (
+										{aiState !== 'running' && (
 											<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/75 p-6 text-center text-zinc-400">
-												<Cpu size={36} className={aiState === 'connecting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
+												<Cpu size={36} className={aiState === 'starting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
 												<p className="text-sm font-bold text-white">
-													{aiState === 'connecting' ? t('connectingAiStream' as any) : aiState === 'waiting' ? t('waitingForFrames' as any) : t('aiStreamUnavailable' as any)}
+													{aiStateLabel}
 												</p>
 												<p className="max-w-md text-xs leading-relaxed text-zinc-500">
-													{jobStatus.running ? t('waitingForFrames' as any) : t('startWorkerForAi' as any)}
+													{aiState === 'stopped' ? 'Press Start to run AI analysis for the selected source.' : aiState === 'no_frames' ? 'The worker is active, but no annotated frames have arrived yet.' : aiState === 'error' ? 'Stop and start AI again, or check the worker logs.' : 'Connecting to the edge worker stream.'}
 												</p>
 											</div>
 										)}
@@ -734,7 +831,15 @@ const LiveMonitoring = () => {
 								<EmptySourceState message={t('selectSourceToStart' as any)} />
 							)}
 
-							{viewMode === 'file' && selectedVideo && (
+							{viewMode === 'file' && selectedVideo && !isPlaying && (
+								<div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/55 p-6 text-center text-zinc-400">
+									<Video size={34} className="text-zinc-600" aria-hidden="true" />
+									<p className="text-sm font-bold text-white">File stopped</p>
+									<p className="max-w-md text-xs leading-relaxed text-zinc-500">Press Start to begin playback for the selected source.</p>
+								</div>
+							)}
+
+							{viewMode === 'file' && selectedVideo && isPlaying && (
 								<div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-white/10 bg-black/70 px-5 py-3 opacity-100 transition-opacity duration-200 lg:opacity-0 lg:group-hover:opacity-100">
 									<button type="button" onClick={() => handleSkip(-10)} className="text-zinc-400 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange" aria-label="Rewind 10 seconds">
 										<Rewind size={20} fill="currentColor" aria-hidden="true" />
@@ -783,6 +888,8 @@ const LiveMonitoring = () => {
 											video={video}
 											isActive={video.id === selectedVideo?.id}
 											onClick={() => handleSelectVideo(video)}
+											onDelete={() => handleDeleteSource(video)}
+											isDeleting={deletingSourceId === video.id}
 										/>
 									))}
 								</div>
@@ -855,25 +962,32 @@ const LiveMonitoring = () => {
 								key={`fullscreen-${selectedVideo.streamUrl}`}
 								src={selectedVideo.streamUrl}
 								className="h-full w-full object-contain"
-								autoPlay
+								autoPlay={isPlaying}
 								muted
 								loop
 								playsInline
-								controls
 								preload="metadata"
 								onError={() => setJobError('Unable to load this video source in fullscreen view.')}
 							/>
 						) : (
 							<div className="relative h-full w-full">
 								<canvas ref={fullscreenAiCanvasRef} className="h-full w-full object-contain" aria-label="Maximized AI annotated stream" />
-								{aiState !== 'streaming' && (
+								{aiState !== 'running' && (
 									<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/75 p-6 text-center text-zinc-400">
-										<Cpu size={42} className={aiState === 'connecting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
+										<Cpu size={42} className={aiState === 'starting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
 										<p className="text-sm font-bold text-white">
-											{jobStatus.running ? t('waitingForFrames' as any) : t('startWorkerForAi' as any)}
+											{aiStateLabel}
 										</p>
 									</div>
 								)}
+							</div>
+						)}
+
+						{viewMode === 'file' && !isPlaying && (
+							<div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/55 p-6 text-center text-zinc-400">
+								<Video size={42} className="text-zinc-600" aria-hidden="true" />
+								<p className="text-sm font-bold text-white">File stopped</p>
+								<p className="max-w-md text-xs leading-relaxed text-zinc-500">Close this view and press Start to begin playback.</p>
 							</div>
 						)}
 
