@@ -50,6 +50,9 @@ class FramePublisher:
         self._redis: Optional[object] = None
         self._available = False
         self._frames_published = 0
+        self._rate_limited_skips = 0
+        self._publish_failures = 0
+        self._last_diag_log = 0.0
 
         self._connect()
 
@@ -97,6 +100,7 @@ class FramePublisher:
         # Rate limiting
         now = time.monotonic()
         if (now - self._last_publish) < self._min_interval:
+            self._rate_limited_skips += 1
             return False
 
         try:
@@ -118,11 +122,31 @@ class FramePublisher:
             pipe.execute()
             self._last_publish = now
             self._frames_published += 1
+            if self._frames_published % 60 == 0 or (now - self._last_diag_log) >= 30:
+                self._last_diag_log = now
+                logger.info(
+                    "frame publish stats camera_id=%s key=%s signal=%s published=%d rate_limited=%d quality=%d max_width=%d",
+                    self._camera_id,
+                    self._latest_key,
+                    self._signal_channel,
+                    self._frames_published,
+                    self._rate_limited_skips,
+                    self._jpeg_quality,
+                    self._max_width,
+                )
             return True
         except Exception:
             # Don't crash the pipeline for streaming failures.
+            self._publish_failures += 1
             if self._frames_published == 0:
                 logger.warning("Frame publish failed on first frame — Redis may be down")
+            elif self._publish_failures % 60 == 0:
+                logger.warning(
+                    "frame publish failures camera_id=%s key=%s failures=%d",
+                    self._camera_id,
+                    self._latest_key,
+                    self._publish_failures,
+                )
             return False
 
     def close(self) -> None:

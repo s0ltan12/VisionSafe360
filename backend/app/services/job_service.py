@@ -14,6 +14,7 @@ from rq.job import Job
 
 from .queue_service import (
     QUEUE_NAME,
+    active_jobs_for_worker,
     clear_job_state,
     get_job_queue,
     get_job_state,
@@ -154,6 +155,29 @@ class JobService:
             queue = get_job_queue(str(queue_name))
             retry_max = int(os.getenv("JOB_RETRY_MAX", "3"))
             retry_schedule = [10, 30, 60]
+            if selected_worker:
+                load = active_jobs_for_worker(str(assigned_worker_id)) if assigned_worker_id else 0
+                self._logger.info(
+                    "selected worker for camera",
+                    extra={
+                        "event": "worker_selected",
+                        "camera_id": camera_id,
+                        "worker_id": assigned_worker_id,
+                        "worker_queue": queue.name,
+                        "worker_capacity": selected_worker.get("capacity"),
+                        "worker_load": load,
+                        "source_name": resolved_source,
+                    },
+                )
+            else:
+                self._logger.warning(
+                    "no available worker with spare capacity; queuing on shared queue",
+                    extra={
+                        "event": "worker_unavailable",
+                        "camera_id": camera_id,
+                        "source_name": resolved_source,
+                    },
+                )
 
             job = queue.enqueue(
                 run_edge_worker_job,
