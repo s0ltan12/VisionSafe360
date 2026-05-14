@@ -3,6 +3,7 @@ import {
 	AlertTriangle,
 	Clock,
 	Cpu,
+	Edit2,
 	FastForward,
 	Grid,
 	Layers,
@@ -189,9 +190,11 @@ const DemoVideoCard: React.FC<{
 	video: DemoVideo;
 	isActive: boolean;
 	onClick: () => void;
+	onEdit: () => void;
 	onDelete: () => void;
 	isDeleting: boolean;
-}> = ({ video, isActive, onClick, onDelete, isDeleting }) => {
+	isEditing: boolean;
+}> = ({ video, isActive, onClick, onEdit, onDelete, isDeleting, isEditing }) => {
 	const { t } = useLanguage();
 	return (
 		<div
@@ -229,9 +232,22 @@ const DemoVideoCard: React.FC<{
 					type="button"
 					onClick={(event) => {
 						event.stopPropagation();
+						onEdit();
+					}}
+					disabled={isDeleting || isEditing}
+					className="absolute right-12 top-11 flex h-8 w-8 items-center justify-center rounded-md border border-vs-orange/25 bg-black/75 text-vs-orange opacity-100 transition-colors hover:border-vs-orange/60 hover:text-orange-200 disabled:cursor-wait disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
+					aria-label={`Edit ${video.name}`}
+					title={t('edit' as any)}
+				>
+					{isEditing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Edit2 size={14} aria-hidden="true" />}
+				</button>
+				<button
+					type="button"
+					onClick={(event) => {
+						event.stopPropagation();
 						onDelete();
 					}}
-					disabled={isDeleting}
+					disabled={isDeleting || isEditing}
 					className="absolute right-3 top-11 flex h-8 w-8 items-center justify-center rounded-md border border-red-500/20 bg-black/75 text-red-300 opacity-100 transition-colors hover:border-red-400/50 hover:text-red-100 disabled:cursor-wait disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
 					aria-label={`Delete ${video.name}`}
 					title={t('delete' as any)}
@@ -306,6 +322,7 @@ const LiveMonitoring = () => {
 	const [uploadBusy, setUploadBusy] = useState(false);
 	const [isMaximized, setIsMaximized] = useState(false);
 	const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+	const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
 	const [aiSessionActive, setAiSessionActive] = useState(false);
 
 	const selectedVideo = useMemo(
@@ -512,6 +529,33 @@ const LiveMonitoring = () => {
 		}
 	}, [jobStatus.running, selectedVideoId, waitForJobIdle]);
 
+	const handleEditSource = useCallback(async (video: DemoVideo) => {
+		const nextName = window.prompt('Rename source file', video.fileName);
+		if (!nextName || nextName === video.fileName) return;
+		setEditingSourceId(video.id);
+		setJobError(null);
+		try {
+			const wasSelected = selectedVideoId === video.id;
+			if (wasSelected) {
+				videoPlayerRef.current?.pause();
+				setIsPlaying(false);
+				setAiSessionActive(false);
+				setAiState('stopped');
+				if (jobStatus.running) {
+					await JobsAPI.stop();
+					await waitForJobIdle();
+				}
+			}
+			const updated = await DemoVideosAPI.rename(video.fileName, nextName);
+			setVideos((current) => current.map((item) => (item.id === video.id ? updated : item)));
+			if (wasSelected) setSelectedVideoId(updated.id);
+		} catch (error: any) {
+			setJobError(error?.message ?? 'Failed to rename video source');
+		} finally {
+			setEditingSourceId(null);
+		}
+	}, [jobStatus.running, selectedVideoId, waitForJobIdle]);
+
 	useEffect(() => {
 		const controller = new AbortController();
 		loadVideos({ signal: controller.signal }).catch((error) => {
@@ -683,6 +727,24 @@ const LiveMonitoring = () => {
 		no_frames: 'No frames received',
 		error: 'AI error',
 	}[aiState];
+	const aiStateBadgeClass = aiState === 'running'
+		? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+		: aiState === 'error'
+			? 'border-red-500/30 bg-red-500/15 text-red-300'
+			: aiState === 'no_frames'
+				? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+				: aiState === 'starting'
+					? 'border-vs-orange/30 bg-vs-orange/15 text-vs-orange'
+					: 'border-zinc-700 bg-zinc-900/80 text-zinc-400';
+	const aiStateDotClass = aiState === 'running'
+		? 'animate-pulse bg-emerald-400'
+		: aiState === 'error'
+			? 'bg-red-400'
+			: aiState === 'no_frames'
+				? 'bg-amber-400'
+				: aiState === 'starting'
+					? 'animate-pulse bg-vs-orange'
+					: 'bg-zinc-500';
 	const canStart = Boolean(selectedVideo) && !jobBusy && (viewMode === 'file' ? !isPlaying : !jobStatus.running);
 	const canStop = !jobBusy && (viewMode === 'file' ? isPlaying || jobStatus.running : jobStatus.running || aiState === 'starting' || aiState === 'running' || aiState === 'no_frames');
 
@@ -826,6 +888,10 @@ const LiveMonitoring = () => {
 								) : (
 									<div className="relative h-full w-full">
 										<canvas ref={aiCanvasRef} className="h-full w-full object-contain" aria-label="AI annotated stream" />
+										<div className={`absolute bottom-4 left-4 flex items-center gap-2 rounded-md border px-3 py-1.5 ${aiStateBadgeClass}`}>
+											<span className={`h-2 w-2 rounded-full ${aiStateDotClass}`} />
+											<span className="text-[10px] font-mono font-bold uppercase tracking-wider">{aiStateLabel}</span>
+										</div>
 										{aiState !== 'running' && (
 											<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/75 p-6 text-center text-zinc-400">
 												<Cpu size={36} className={aiState === 'starting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
@@ -900,8 +966,10 @@ const LiveMonitoring = () => {
 											video={video}
 											isActive={video.id === selectedVideo?.id}
 											onClick={() => handleSelectVideo(video)}
+											onEdit={() => handleEditSource(video)}
 											onDelete={() => handleDeleteSource(video)}
 											isDeleting={deletingSourceId === video.id}
+											isEditing={editingSourceId === video.id}
 										/>
 									))}
 								</div>
@@ -984,6 +1052,10 @@ const LiveMonitoring = () => {
 						) : (
 							<div className="relative h-full w-full">
 								<canvas ref={fullscreenAiCanvasRef} className="h-full w-full object-contain" aria-label="Maximized AI annotated stream" />
+								<div className={`absolute bottom-4 left-4 flex items-center gap-2 rounded-md border px-3 py-1.5 ${aiStateBadgeClass}`}>
+									<span className={`h-2 w-2 rounded-full ${aiStateDotClass}`} />
+									<span className="text-[10px] font-mono font-bold uppercase tracking-wider">{aiStateLabel}</span>
+								</div>
 								{aiState !== 'running' && (
 									<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/75 p-6 text-center text-zinc-400">
 										<Cpu size={42} className={aiState === 'starting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />

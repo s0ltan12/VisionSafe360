@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ...utils.permissions import require_roles
@@ -85,6 +85,15 @@ def _annotate_ai_results(frame: Any, detections: list[dict[str, Any]]) -> None:
         }.get(item["severity"], _COLOR_NORMAL)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
         _draw_label(frame, item["label"], x, y, color)
+
+
+def _sanitize_video_filename(filename: str) -> str:
+    safe_name = "".join(c for c in Path(filename).name if c.isalnum() or c in "._- ").strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Empty filename")
+    if not safe_name.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
+        raise HTTPException(status_code=400, detail="Only video files (.mp4, .avi, .mov, .mkv) are allowed")
+    return safe_name
 
 
 def _build_video_entry(path: Path) -> dict[str, str]:
@@ -197,6 +206,26 @@ def delete_video(video_name: str):
     return Response(status_code=204)
 
 
+@router.patch("/videos/{video_name}")
+def rename_video(video_name: str, payload: dict[str, str] = Body(...)) -> dict[str, str]:
+    video_path = (_VIDEOS_DIR / video_name).resolve()
+    if not video_path.exists() or video_path.parent != _VIDEOS_DIR.resolve():
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not video_path.is_file():
+        raise HTTPException(status_code=400, detail="Source is not a removable video file")
+
+    requested_name = payload.get("file_name") or payload.get("name") or ""
+    safe_name = _sanitize_video_filename(requested_name)
+    dest = (_VIDEOS_DIR / safe_name).resolve()
+    if dest.parent != _VIDEOS_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid destination filename")
+    if dest.exists() and dest != video_path:
+        raise HTTPException(status_code=409, detail="A source with that filename already exists")
+    if dest != video_path:
+        video_path.rename(dest)
+    return _build_video_entry(dest)
+
+
 @router.get("/video_feed/{video_name}")
 def video_feed(video_name: str):
     video_path = (_VIDEOS_DIR / video_name).resolve()
@@ -253,13 +282,7 @@ async def upload_video(file: UploadFile = File(...)):
     Accepts multipart form data with a 'file' field containing a video.
     Saves to edge_ai/vids_test/ and returns the video metadata.
     """
-    filename = Path(file.filename or "").name
-    if not filename:
-        raise HTTPException(status_code=400, detail="Empty filename")
-
-    safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ").strip()
-    if not safe_name.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-        raise HTTPException(status_code=400, detail="Only video files (.mp4, .avi, .mov, .mkv) are allowed")
+    safe_name = _sanitize_video_filename(file.filename or "")
 
     _VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     dest = _VIDEOS_DIR / safe_name

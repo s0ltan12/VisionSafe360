@@ -323,6 +323,14 @@ export const DemoVideosAPI = {
 
   delete: (fileName: string) =>
     request<void>(`/api/media/videos/${encodeURIComponent(fileName)}`, { method: 'DELETE' }),
+
+  rename: async (fileName: string, nextFileName: string) => {
+    const data = await request<any>(`/api/media/videos/${encodeURIComponent(fileName)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ file_name: nextFileName }),
+    });
+    return toFrontendDemoVideo(data);
+  },
 };
 
 export const JobsAPI = {
