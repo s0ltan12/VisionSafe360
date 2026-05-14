@@ -1,7 +1,7 @@
 """add incident and alert camera/worker metadata
 
-Revision ID: 20260515_add_incident_alert_metadata
-Revises: 23137d6336b1_initial_migration_create_users_cameras_
+Revision ID: 20260515_ai_meta
+Revises: 23137d6336b1
 Create Date: 2026-05-15
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260515_add_incident_alert_metadata"
-down_revision = "23137d6336b1_initial_migration_create_users_cameras_"
+revision = "20260515_ai_meta"
+down_revision = "23137d6336b1"
 branch_labels = None
 depends_on = None
 
