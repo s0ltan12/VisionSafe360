@@ -22,6 +22,7 @@ export interface Camera {
   name: string;
   zone: string;
   url?: string;
+  stream_url?: string;  // RTSP/live stream source for AI detection
   status: 'Online' | 'Offline';
   isPrivacyMode: boolean;
   thumbnail: string;
@@ -43,10 +44,10 @@ export interface DemoVideo {
   id: string;
   name: string;
   fileName: string;
+  type?: 'demo' | 'upload';
   zone: string;
   description: string;
   streamUrl: string;
-  streamFeedUrl: string;
 }
 
 export interface JobStatus {

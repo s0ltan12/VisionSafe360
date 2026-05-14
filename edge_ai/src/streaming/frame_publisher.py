@@ -1,7 +1,7 @@
 """Redis-based frame publisher for headless dashboard streaming.
 
-Publishes JPEG-encoded annotated frames to a Redis Pub/Sub channel so that
-the backend can relay them to connected dashboard clients via WebSocket.
+Publishes JPEG-encoded annotated frames to Redis so that the backend can relay
+the latest annotated frame to connected dashboard clients via WebSocket.
 
 Usage inside the pipeline::
 
@@ -9,7 +9,8 @@ Usage inside the pipeline::
     publisher.publish(annotated_frame)  # numpy BGR frame
     publisher.close()
 
-Channel name: ``visionsafe:stream:{camera_id}``
+Latest-frame key: ``visionsafe:stream:{camera_id}:latest``
+Signal channel: ``visionsafe:stream:{camera_id}:signals``
 """
 from __future__ import annotations
 
@@ -37,9 +38,11 @@ class FramePublisher:
         jpeg_quality: int | None = None,
     ) -> None:
         self._camera_id = camera_id
-        self._channel = f"visionsafe:stream:{camera_id}"
+        self._latest_key = f"visionsafe:stream:{camera_id}:latest"
+        self._signal_channel = f"visionsafe:stream:{camera_id}:signals"
         self._max_fps = max_fps or int(os.getenv("VISIONSAFE_STREAM_MAX_FPS", str(_DEFAULT_MAX_FPS)))
         self._jpeg_quality = jpeg_quality or int(os.getenv("VISIONSAFE_STREAM_JPEG_QUALITY", str(_DEFAULT_JPEG_QUALITY)))
+        self._frame_ttl_seconds = int(os.getenv("VISIONSAFE_STREAM_FRAME_TTL_SECONDS", "10"))
         self._min_interval = 1.0 / max(1, self._max_fps)
         self._last_publish: float = 0.0
         self._redis: Optional[object] = None
@@ -53,10 +56,10 @@ class FramePublisher:
         try:
             import redis
 
-            host = os.getenv("REDIS_HOST", "localhost")
-            port = int(os.getenv("REDIS_PORT", "6379"))
-            password = os.getenv("REDIS_PASSWORD") or None
-            db = int(os.getenv("REDIS_DB", "0"))
+            host = os.getenv("REDIS_STREAMING_HOST", os.getenv("REDIS_HOST", "localhost"))
+            port = int(os.getenv("REDIS_STREAMING_PORT", os.getenv("REDIS_PORT", "6379")))
+            password = os.getenv("REDIS_STREAMING_PASSWORD", os.getenv("REDIS_PASSWORD") or "") or None
+            db = int(os.getenv("REDIS_STREAMING_DB", os.getenv("REDIS_DB", "3")))
 
             self._redis = redis.Redis(
                 host=host,
@@ -70,8 +73,8 @@ class FramePublisher:
             self._redis.ping()
             self._available = True
             logger.info(
-                "Frame publisher connected to Redis %s:%s channel=%s max_fps=%d quality=%d",
-                host, port, self._channel, self._max_fps, self._jpeg_quality,
+                "Frame publisher connected to Redis %s:%s key=%s signal=%s max_fps=%d quality=%d",
+                host, port, self._latest_key, self._signal_channel, self._max_fps, self._jpeg_quality,
             )
         except Exception as exc:
             self._available = False
@@ -105,7 +108,11 @@ class FramePublisher:
             if not ok:
                 return False
 
-            self._redis.publish(self._channel, buf.tobytes())
+            payload = buf.tobytes()
+            pipe = self._redis.pipeline()
+            pipe.setex(self._latest_key, self._frame_ttl_seconds, payload)
+            pipe.publish(self._signal_channel, str(time.time()).encode("ascii"))
+            pipe.execute()
             self._last_publish = now
             self._frames_published += 1
             return True
@@ -118,8 +125,8 @@ class FramePublisher:
     def close(self) -> None:
         """Clean shutdown."""
         logger.info(
-            "Frame publisher closing — published %d frames on channel=%s",
-            self._frames_published, self._channel,
+            "Frame publisher closing — published %d frames on key=%s signal=%s",
+            self._frames_published, self._latest_key, self._signal_channel,
         )
         if self._redis is not None:
             try:

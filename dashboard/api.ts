@@ -90,6 +90,14 @@ function toFrontendCamera(c: any): Camera {
   };
 }
 
+function appendAuthToken(url: string | null | undefined): string {
+  if (!url) return '';
+  const token = getToken();
+  if (!token) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
 function toFrontendDemoVideo(v: any): DemoVideo {
   return {
     id: v.id,
@@ -97,8 +105,7 @@ function toFrontendDemoVideo(v: any): DemoVideo {
     fileName: v.file_name,
     zone: v.zone,
     description: v.description,
-    streamUrl: v.stream_url,
-    streamFeedUrl: v.stream_feed_url,
+    streamUrl: appendAuthToken(v.stream_url),
   };
 }
 
@@ -126,25 +133,55 @@ function toFrontendJobStatus(s: any): JobStatus {
   };
 }
 
+function toFrontendAlert(a: any): Alert {
+  return {
+    id:          a.id,
+    type:        a.type,
+    severity:    a.severity,
+    zone:        a.zone,
+    camera:      a.camera,
+    timestamp:   a.occurred_at || a.timestamp || a.created_at || '',
+    status:      a.status,
+    description: a.description,
+    thumbnail:   a.thumbnail,
+    confidence:  a.confidence,
+  };
+}
+
+function toBackendAlert(alert: Partial<Alert>): any {
+  const body: any = { ...alert };
+  if (alert.timestamp !== undefined) {
+    body.occurred_at = alert.timestamp;
+    delete body.timestamp;
+  }
+  return body;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ALERTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const AlertsAPI = {
-  getAll: () =>
-    request<Alert[]>('/api/alerts/all'),
+  getAll: async (): Promise<Alert[]> => {
+    const data = await request<any[]>('/api/alerts/all');
+    return data.map(toFrontendAlert);
+  },
 
-  update: (id: string, changes: Partial<Alert>) =>
-    request<Alert>(`/api/alerts/${id}`, {
+  update: async (id: string, changes: Partial<Alert>): Promise<Alert> => {
+    const data = await request<any>(`/api/alerts/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify(changes),
-    }),
+      body: JSON.stringify(toBackendAlert(changes)),
+    });
+    return toFrontendAlert(data);
+  },
 
-  create: (alert: Alert) =>
-    request<Alert>('/api/alerts', {
+  create: async (alert: Alert): Promise<Alert> => {
+    const data = await request<any>('/api/alerts', {
       method: 'POST',
-      body: JSON.stringify(alert),
-    }),
+      body: JSON.stringify(toBackendAlert(alert)),
+    });
+    return toFrontendAlert(data);
+  },
 
   delete: (id: string) =>
     request<void>(`/api/alerts/${id}`, { method: 'DELETE' }),
@@ -191,8 +228,8 @@ export const CamerasAPI = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const IncidentsAPI = {
-  getAll: async (): Promise<Incident[]> => {
-    const data = await request<any[]>('/api/incidents/all');
+  getAll: async (options: RequestInit = {}): Promise<Incident[]> => {
+    const data = await request<any[]>('/api/incidents/all', options);
     return data.map(toFrontendIncident);
   },
 
@@ -271,15 +308,15 @@ export const AuthAPI = {
 };
 
 export const DemoVideosAPI = {
-  getAll: async () => {
-    const data = await request<any[]>('/api/media/videos');
+  getAll: async (options: RequestInit = {}) => {
+    const data = await request<any[]>('/api/media/videos', options);
     return data.map(toFrontendDemoVideo);
   },
 };
 
 export const JobsAPI = {
-  status: async () => {
-    const data = await request<any>('/api/jobs/status');
+  status: async (options: RequestInit = {}) => {
+    const data = await request<any>('/api/jobs/status', options);
     return toFrontendJobStatus(data);
   },
 
