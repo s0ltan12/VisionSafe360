@@ -347,8 +347,9 @@ export const JobsAPI = {
     return toFrontendJobStatus(data);
   },
 
-  stop: async () => {
-    const data = await request<any>('/api/jobs/stop', {
+  stop: async (cameraId?: string) => {
+    const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}` : '';
+    const data = await request<any>(`/api/jobs/stop${query}`, {
       method: 'POST',
     });
     return toFrontendJobStatus(data);

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	AlertTriangle,
+	CheckSquare,
 	Clock,
 	Cpu,
 	Edit2,
@@ -91,6 +92,21 @@ const StatusBadge = ({
 };
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+type ViewMode = 'file' | 'ai' | 'multi_ai';
+type AiViewState = 'stopped' | 'starting' | 'running' | 'no_frames' | 'error';
+
+interface MultiAiStreamState {
+	videoId: string;
+	cameraId: string;
+	state: AiViewState;
+	error?: string | null;
+}
+
+const makeMultiCameraId = (video: DemoVideo, index: number) => {
+	const safeId = video.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 28) || `source_${index + 1}`;
+	return `multi_${index + 1}_${safeId}`;
+};
 
 const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -194,7 +210,9 @@ const DemoVideoCard: React.FC<{
 	onDelete: () => void;
 	isDeleting: boolean;
 	isEditing: boolean;
-}> = ({ video, isActive, onClick, onEdit, onDelete, isDeleting, isEditing }) => {
+	isMultiSelect?: boolean;
+	isMultiSelected?: boolean;
+}> = ({ video, isActive, onClick, onEdit, onDelete, isDeleting, isEditing, isMultiSelect = false, isMultiSelected = false }) => {
 	const { t } = useLanguage();
 	return (
 		<div
@@ -209,10 +227,10 @@ const DemoVideoCard: React.FC<{
 			}}
 			role="button"
 			tabIndex={isDeleting ? -1 : 0}
-			aria-pressed={isActive}
+			aria-pressed={isMultiSelect ? isMultiSelected : isActive}
 			aria-disabled={isDeleting}
 			className={`group relative min-h-32 overflow-hidden rounded-lg border text-start transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
-				isActive ? 'border-vs-orange shadow-[0_0_0_1px_rgba(249,115,22,0.45)]' : 'border-zinc-800 hover:border-zinc-700'
+				isActive || isMultiSelected ? 'border-vs-orange shadow-[0_0_0_1px_rgba(249,115,22,0.45)]' : 'border-zinc-800 hover:border-zinc-700'
 			}`}
 		>
 			<SourcePreview video={video} />
@@ -224,10 +242,17 @@ const DemoVideoCard: React.FC<{
 							{t('live')}
 						</span>
 					</div>
-					<span className={`max-w-[52%] truncate rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-wider ${isActive ? 'border-vs-orange/30 bg-vs-orange/10 text-vs-orange' : 'border-white/10 bg-black/50 text-zinc-400'}`}>
+					<span className={`max-w-[52%] truncate rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-wider ${isActive || isMultiSelected ? 'border-vs-orange/30 bg-vs-orange/10 text-vs-orange' : 'border-white/10 bg-black/50 text-zinc-400'}`}>
 						{video.zone}
 					</span>
 				</div>
+				{isMultiSelect && (
+					<div className={`absolute left-3 top-11 flex h-8 w-8 items-center justify-center rounded-md border bg-black/75 ${
+						isMultiSelected ? 'border-vs-orange/50 text-vs-orange' : 'border-white/10 text-zinc-500'
+					}`} aria-hidden="true">
+						{isMultiSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+					</div>
+				)}
 				<button
 					type="button"
 					onClick={(event) => {
@@ -294,9 +319,10 @@ const EmptySourceState = ({ message }: { message: string }) => (
 const LiveMonitoring = () => {
 	const { t } = useLanguage();
 	const [layout, setLayout] = useState<4 | 9>(4);
-	const [viewMode, setViewMode] = useState<'file' | 'ai'>('file');
+	const [viewMode, setViewMode] = useState<ViewMode>('file');
 	const [videos, setVideos] = useState<DemoVideo[]>([]);
 	const [selectedVideoId, setSelectedVideoId] = useState('');
+	const [selectedMultiVideoIds, setSelectedMultiVideoIds] = useState<string[]>([]);
 	const [incidents, setIncidents] = useState<Incident[]>([]);
 	const [jobStatus, setJobStatus] = useState<JobStatus>({ running: false });
 	const [jobBusy, setJobBusy] = useState(false);
@@ -308,7 +334,8 @@ const LiveMonitoring = () => {
 	const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 	const [dataError, setDataError] = useState<string | null>(null);
 	const [wsState, setWsState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-	const [aiState, setAiState] = useState<'stopped' | 'starting' | 'running' | 'no_frames' | 'error'>('stopped');
+	const [aiState, setAiState] = useState<AiViewState>('stopped');
+	const [multiAiStates, setMultiAiStates] = useState<Record<string, MultiAiStreamState>>({});
 
 	const wsRef = useRef<WebSocket | null>(null);
 	const reconnectTimerRef = useRef<number | null>(null);
@@ -317,6 +344,9 @@ const LiveMonitoring = () => {
 	const aiCanvasRef = useRef<HTMLCanvasElement>(null);
 	const fullscreenAiCanvasRef = useRef<HTMLCanvasElement>(null);
 	const aiWsRef = useRef<WebSocket | null>(null);
+	const multiAiWsRefs = useRef<Record<string, WebSocket>>({});
+	const multiAiCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
+	const fullscreenMultiAiCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [uploadBusy, setUploadBusy] = useState(false);
@@ -324,10 +354,28 @@ const LiveMonitoring = () => {
 	const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
 	const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
 	const [aiSessionActive, setAiSessionActive] = useState(false);
+	const [multiAiSessionActive, setMultiAiSessionActive] = useState(false);
 
 	const selectedVideo = useMemo(
 		() => videos.find((video) => video.id === selectedVideoId) ?? null,
 		[videos, selectedVideoId],
+	);
+	const selectedMultiVideos = useMemo(
+		() => selectedMultiVideoIds
+			.map((id) => videos.find((video) => video.id === id))
+			.filter(Boolean) as DemoVideo[],
+		[selectedMultiVideoIds, videos],
+	);
+	const multiStreamDescriptors = useMemo(
+		() => selectedMultiVideos.map((video, index) => ({
+			video,
+			cameraId: makeMultiCameraId(video, index),
+		})),
+		[selectedMultiVideos],
+	);
+	const multiDescriptorKey = useMemo(
+		() => multiStreamDescriptors.map((item) => `${item.video.id}:${item.cameraId}`).join('|'),
+		[multiStreamDescriptors],
 	);
 
 	const activeCameraId = jobStatus.cameraId || 'cam_01';
@@ -353,6 +401,10 @@ const LiveMonitoring = () => {
 			setSelectedVideoId((current) => {
 				if (current && data.some((video) => video.id === current)) return current;
 				return data[0]?.id || '';
+			});
+			setSelectedMultiVideoIds((current) => {
+				const valid = current.filter((id) => data.some((video) => video.id === id));
+				return valid.length > 0 ? valid : data.slice(0, Math.min(2, data.length)).map((video) => video.id);
 			});
 			setDataError(null);
 		} finally {
@@ -390,6 +442,28 @@ const LiveMonitoring = () => {
 		return !latestStatus.running;
 	}, []);
 
+	const drawFrameToCanvases = useCallback((frame: ArrayBuffer, canvases: Array<HTMLCanvasElement | null>) => {
+		const blob = new Blob([frame], { type: 'image/jpeg' });
+		const imageUrl = URL.createObjectURL(blob);
+		const image = new Image();
+		image.onload = () => {
+			for (const canvas of canvases) {
+				if (!canvas) continue;
+				const context = canvas.getContext('2d');
+				if (!context) continue;
+				canvas.width = image.naturalWidth || image.width;
+				canvas.height = image.naturalHeight || image.height;
+				context.clearRect(0, 0, canvas.width, canvas.height);
+				context.imageSmoothingEnabled = true;
+				context.imageSmoothingQuality = 'high';
+				context.drawImage(image, 0, 0, canvas.width, canvas.height);
+			}
+			URL.revokeObjectURL(imageUrl);
+		};
+		image.onerror = () => URL.revokeObjectURL(imageUrl);
+		image.src = imageUrl;
+	}, []);
+
 	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = 'cam_01') => {
 		const status = await JobsAPI.start(video.fileName, cameraId);
 		setJobStatus(status);
@@ -398,7 +472,12 @@ const LiveMonitoring = () => {
 	}, []);
 
 	const startMonitoring = useCallback(async () => {
-		if (!selectedVideo || jobBusy) return;
+		if (jobBusy) return;
+		if (viewMode !== 'multi_ai' && !selectedVideo) return;
+		if (viewMode === 'multi_ai' && selectedMultiVideos.length === 0) {
+			setJobError('Select at least one source for Multi-Camera AI.');
+			return;
+		}
 		setJobBusy(true);
 		setJobError(null);
 		try {
@@ -407,6 +486,41 @@ const LiveMonitoring = () => {
 				if (!player) return;
 				await player.play();
 				setIsPlaying(true);
+				return;
+			}
+			if (viewMode === 'multi_ai') {
+				setAiSessionActive(false);
+				setAiState('stopped');
+				setMultiAiSessionActive(true);
+				const startingStates = Object.fromEntries(
+					multiStreamDescriptors.map(({ video, cameraId }) => [
+						cameraId,
+						{ videoId: video.id, cameraId, state: 'starting' as AiViewState, error: null },
+					]),
+				);
+				setMultiAiStates(startingStates);
+				const results = await Promise.allSettled(
+					multiStreamDescriptors.map(({ video, cameraId }) => startJobForVideo(video, cameraId)),
+				);
+				const failed = results
+					.map((result, index) => ({ result, descriptor: multiStreamDescriptors[index] }))
+					.filter((item) => item.result.status === 'rejected');
+				if (failed.length > 0) {
+					setMultiAiStates((current) => {
+						const next = { ...current };
+						for (const item of failed) {
+							next[item.descriptor.cameraId] = {
+								videoId: item.descriptor.video.id,
+								cameraId: item.descriptor.cameraId,
+								state: 'error',
+								error: (item.result as PromiseRejectedResult).reason?.message ?? 'Failed to start AI stream',
+							};
+						}
+						return next;
+					});
+					setJobError(`${failed.length} AI stream${failed.length === 1 ? '' : 's'} failed to start.`);
+				}
+				await loadJobStatus().catch(() => undefined);
 				return;
 			}
 			setAiState('starting');
@@ -421,7 +535,7 @@ const LiveMonitoring = () => {
 		} finally {
 			setJobBusy(false);
 		}
-	}, [jobBusy, selectedVideo, startJobForVideo, viewMode]);
+	}, [jobBusy, loadJobStatus, multiStreamDescriptors, selectedMultiVideos.length, selectedVideo, startJobForVideo, viewMode]);
 
 	const stopMonitoring = async () => {
 		if (jobBusy) return;
@@ -437,6 +551,16 @@ const LiveMonitoring = () => {
 				setAiSessionActive(false);
 				setAiState('stopped');
 			}
+			if (viewMode === 'multi_ai') {
+				setMultiAiSessionActive(false);
+				for (const ws of Object.values(multiAiWsRefs.current) as WebSocket[]) {
+					ws.close();
+				}
+				multiAiWsRefs.current = {};
+				setMultiAiStates((current) => Object.fromEntries(
+					Object.entries(current).map(([cameraId, state]) => [cameraId, { ...(state as MultiAiStreamState), state: 'stopped' as AiViewState }]),
+				) as Record<string, MultiAiStreamState>);
+			}
 			if (jobStatus.running) {
 				const status = await JobsAPI.stop();
 				setJobStatus(status);
@@ -450,6 +574,12 @@ const LiveMonitoring = () => {
 			if (viewMode === 'ai') {
 				setAiSessionActive(false);
 				setAiState('error');
+			}
+			if (viewMode === 'multi_ai') {
+				setMultiAiSessionActive(false);
+				setMultiAiStates((current) => Object.fromEntries(
+					Object.entries(current).map(([cameraId, state]) => [cameraId, { ...(state as MultiAiStreamState), state: 'error' as AiViewState, error: error?.message ?? 'Failed to stop AI stream' }]),
+				) as Record<string, MultiAiStreamState>);
 			}
 		} finally {
 			setJobBusy(false);
@@ -489,17 +619,29 @@ const LiveMonitoring = () => {
 		}
 	};
 
-	const handleModeChange = useCallback((mode: 'file' | 'ai') => {
+	const handleModeChange = useCallback((mode: ViewMode) => {
 		setViewMode(mode);
+		if (mode !== 'file') {
+			videoPlayerRef.current?.pause();
+			setIsPlaying(false);
+		}
 	}, []);
 
 	const handleSelectVideo = useCallback((video: DemoVideo) => {
+		if (viewMode === 'multi_ai') {
+			setSelectedMultiVideoIds((current) => (
+				current.includes(video.id)
+					? current.filter((id) => id !== video.id)
+					: [...current, video.id]
+			));
+			return;
+		}
 		videoPlayerRef.current?.pause();
 		setIsPlaying(false);
 		setAiSessionActive(false);
 		setAiState('stopped');
 		setSelectedVideoId(video.id);
-	}, []);
+	}, [viewMode]);
 
 	const handleDeleteSource = useCallback(async (video: DemoVideo) => {
 		const confirmed = window.confirm(`Delete source "${video.name}"? This removes it from Available Sources.`);
@@ -508,16 +650,19 @@ const LiveMonitoring = () => {
 		setJobError(null);
 		try {
 			const wasSelected = selectedVideoId === video.id;
-			if (wasSelected) {
+			const wasMultiSelected = selectedMultiVideoIds.includes(video.id);
+			if (wasSelected || wasMultiSelected) {
 				videoPlayerRef.current?.pause();
 				setIsPlaying(false);
 				setIsMaximized(false);
-				setSelectedVideoId('');
+				if (wasSelected) setSelectedVideoId('');
+				if (wasMultiSelected) setSelectedMultiVideoIds((current) => current.filter((id) => id !== video.id));
 				if (jobStatus.running) {
 					await JobsAPI.stop();
 					await waitForJobIdle();
 				}
 				setAiSessionActive(false);
+				setMultiAiSessionActive(false);
 				setAiState('stopped');
 			}
 			await DemoVideosAPI.delete(video.fileName);
@@ -527,7 +672,7 @@ const LiveMonitoring = () => {
 		} finally {
 			setDeletingSourceId(null);
 		}
-	}, [jobStatus.running, selectedVideoId, waitForJobIdle]);
+	}, [jobStatus.running, selectedMultiVideoIds, selectedVideoId, waitForJobIdle]);
 
 	const handleEditSource = useCallback(async (video: DemoVideo) => {
 		const nextName = window.prompt('Rename source file', video.fileName);
@@ -549,6 +694,7 @@ const LiveMonitoring = () => {
 			const updated = await DemoVideosAPI.rename(video.fileName, nextName);
 			setVideos((current) => current.map((item) => (item.id === video.id ? updated : item)));
 			if (wasSelected) setSelectedVideoId(updated.id);
+			setSelectedMultiVideoIds((current) => current.map((id) => (id === video.id ? updated.id : id)));
 		} catch (error: any) {
 			setJobError(error?.message ?? 'Failed to rename video source');
 		} finally {
@@ -680,23 +826,8 @@ const LiveMonitoring = () => {
 				window.clearTimeout(noFrameTimer);
 				noFrameTimer = null;
 			}
-			const blob = new Blob([frame], { type: 'image/jpeg' });
-			const imageUrl = URL.createObjectURL(blob);
-			const image = new Image();
-			image.onload = () => {
-				const canvases = [aiCanvasRef.current, fullscreenAiCanvasRef.current].filter(Boolean) as HTMLCanvasElement[];
-				for (const canvas of canvases) {
-					const context = canvas.getContext('2d');
-					if (!context) continue;
-					canvas.width = image.width;
-					canvas.height = image.height;
-					context.drawImage(image, 0, 0);
-				}
-				if (canvases.length > 0) setAiState('running');
-				URL.revokeObjectURL(imageUrl);
-			};
-			image.onerror = () => URL.revokeObjectURL(imageUrl);
-			image.src = imageUrl;
+			drawFrameToCanvases(frame, [aiCanvasRef.current, fullscreenAiCanvasRef.current]);
+			setAiState('running');
 		};
 
 		return () => {
@@ -708,7 +839,99 @@ const LiveMonitoring = () => {
 			ws.close();
 			aiWsRef.current = null;
 		};
-	}, [activeCameraId, aiSessionActive, jobBusy, jobStatus.running, viewMode]);
+	}, [activeCameraId, aiSessionActive, drawFrameToCanvases, jobBusy, jobStatus.running, viewMode]);
+
+	useEffect(() => {
+		if (viewMode !== 'multi_ai' || !multiAiSessionActive || multiStreamDescriptors.length === 0) {
+			if (viewMode === 'multi_ai' && !jobBusy && !multiAiSessionActive) {
+				setMultiAiStates((current) => Object.fromEntries(
+					Object.entries(current).map(([cameraId, state]) => [cameraId, { ...(state as MultiAiStreamState), state: 'stopped' as AiViewState }]),
+				) as Record<string, MultiAiStreamState>);
+			}
+			return undefined;
+		}
+
+		const token = getAuthToken();
+		if (!token) {
+			setMultiAiStates((current) => Object.fromEntries(
+				multiStreamDescriptors.map(({ video, cameraId }) => [
+					cameraId,
+					current[cameraId] ?? { videoId: video.id, cameraId, state: 'error' as AiViewState, error: 'Missing auth token' },
+				]),
+			));
+			return undefined;
+		}
+
+		let stopped = false;
+		const timers: Record<string, number> = {};
+		const sockets: Record<string, WebSocket> = {};
+
+		for (const { video, cameraId } of multiStreamDescriptors) {
+			setMultiAiStates((current) => ({
+				...current,
+				[cameraId]: current[cameraId] ?? { videoId: video.id, cameraId, state: 'starting', error: null },
+			}));
+			timers[cameraId] = window.setTimeout(() => {
+				if (!stopped) {
+					setMultiAiStates((current) => ({
+						...current,
+						[cameraId]: {
+							...(current[cameraId] ?? { videoId: video.id, cameraId }),
+							state: 'no_frames',
+						},
+					}));
+				}
+			}, 12000);
+
+			const ws = new WebSocket(getAIStreamUrl(cameraId));
+			ws.binaryType = 'arraybuffer';
+			sockets[cameraId] = ws;
+			multiAiWsRefs.current[cameraId] = ws;
+
+			ws.onmessage = (event) => {
+				const frame = event.data instanceof ArrayBuffer ? event.data : null;
+				if (!frame) return;
+				if (timers[cameraId]) {
+					window.clearTimeout(timers[cameraId]);
+					delete timers[cameraId];
+				}
+				drawFrameToCanvases(frame, [
+					multiAiCanvasRefs.current[cameraId] ?? null,
+					fullscreenMultiAiCanvasRefs.current[cameraId] ?? null,
+				]);
+				setMultiAiStates((current) => ({
+					...current,
+					[cameraId]: { videoId: video.id, cameraId, state: 'running', error: null },
+				}));
+			};
+			ws.onerror = () => {
+				setMultiAiStates((current) => ({
+					...current,
+					[cameraId]: { videoId: video.id, cameraId, state: 'error', error: 'AI stream connection failed' },
+				}));
+				ws.close();
+			};
+			ws.onclose = () => {
+				if (!stopped) {
+					setMultiAiStates((current) => ({
+						...current,
+						[cameraId]: { ...(current[cameraId] ?? { videoId: video.id, cameraId }), state: 'error', error: 'AI stream disconnected' },
+					}));
+				}
+			};
+		}
+
+		return () => {
+			stopped = true;
+			for (const timer of Object.values(timers)) {
+				window.clearTimeout(timer);
+			}
+			for (const [cameraId, ws] of Object.entries(sockets)) {
+				ws.close();
+				delete multiAiWsRefs.current[cameraId];
+			}
+		};
+	}, [drawFrameToCanvases, jobBusy, multiAiSessionActive, multiDescriptorKey, multiStreamDescriptors, viewMode]);
 
 	useEffect(() => {
 		if (!isMaximized) return undefined;
@@ -720,13 +943,14 @@ const LiveMonitoring = () => {
 	}, [isMaximized]);
 
 	const showInitialLoading = videosLoading && videos.length === 0;
-	const aiStateLabel = {
+	const aiStateLabelMap: Record<AiViewState, string> = {
 		stopped: 'AI stopped',
 		starting: 'Starting AI...',
 		running: 'AI running',
 		no_frames: 'No frames received',
 		error: 'AI error',
-	}[aiState];
+	};
+	const aiStateLabel = aiStateLabelMap[aiState];
 	const aiStateBadgeClass = aiState === 'running'
 		? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
 		: aiState === 'error'
@@ -745,8 +969,21 @@ const LiveMonitoring = () => {
 				: aiState === 'starting'
 					? 'animate-pulse bg-vs-orange'
 					: 'bg-zinc-500';
-	const canStart = Boolean(selectedVideo) && !jobBusy && (viewMode === 'file' ? !isPlaying : !jobStatus.running);
-	const canStop = !jobBusy && (viewMode === 'file' ? isPlaying || jobStatus.running : jobStatus.running || aiState === 'starting' || aiState === 'running' || aiState === 'no_frames');
+	const multiActive = (Object.values(multiAiStates) as MultiAiStreamState[]).some((stream) => ['starting', 'running', 'no_frames'].includes(stream.state));
+	const canStart = !jobBusy && (
+		viewMode === 'file'
+			? Boolean(selectedVideo) && !isPlaying
+			: viewMode === 'multi_ai'
+				? selectedMultiVideos.length > 0 && !multiAiSessionActive && !multiActive
+				: Boolean(selectedVideo) && !jobStatus.running
+	);
+	const canStop = !jobBusy && (
+		viewMode === 'file'
+			? isPlaying || jobStatus.running
+			: viewMode === 'multi_ai'
+				? jobStatus.running || multiAiSessionActive || multiActive
+				: jobStatus.running || aiState === 'starting' || aiState === 'running' || aiState === 'no_frames'
+	);
 
 	return (
 		<div className="flex h-full min-h-0 overflow-hidden bg-[#050505]">
@@ -814,7 +1051,7 @@ const LiveMonitoring = () => {
 					</div>
 				)}
 
-				<div className="grid min-h-[720px] gap-5 lg:h-[calc(100vh-11.5rem)] lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
+				<div className="grid min-h-[780px] gap-4 lg:h-[calc(100vh-9.5rem)] lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_340px]">
 					<div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-[#09090b] shadow-2xl">
 						<div className="flex flex-col gap-3 border-b border-zinc-800 bg-zinc-900/50 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
 							<div className="flex flex-wrap items-center gap-3">
@@ -825,7 +1062,7 @@ const LiveMonitoring = () => {
 									{jobStatus.running ? t('workerActive' as any) : t('workerOffline' as any)}
 								</div>
 								<div className="flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950 p-1" role="tablist" aria-label="Live monitoring view mode">
-									{(['file', 'ai'] as const).map((mode) => (
+									{(['file', 'ai', 'multi_ai'] as const).map((mode) => (
 										<button
 											key={mode}
 											type="button"
@@ -836,10 +1073,15 @@ const LiveMonitoring = () => {
 												viewMode === mode ? 'bg-vs-orange text-black' : 'text-zinc-500 hover:text-zinc-300'
 											}`}
 										>
-											{mode === 'ai' ? 'AI' : t(mode as any)}
+											{mode === 'ai' ? 'AI' : mode === 'multi_ai' ? 'Multi AI' : t(mode as any)}
 										</button>
 									))}
 								</div>
+								{viewMode === 'multi_ai' && (
+									<span className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">
+										{selectedMultiVideos.length} selected
+									</span>
+								)}
 							</div>
 
 							<div className="flex flex-wrap items-center gap-2">
@@ -864,12 +1106,47 @@ const LiveMonitoring = () => {
 							</div>
 						</div>
 
-						<div className="group relative flex min-h-[320px] flex-1 bg-black">
+						<div className="group relative flex min-h-[420px] flex-1 bg-black">
 							{showInitialLoading ? (
 								<div className="flex h-full w-full flex-col items-center justify-center gap-3 text-zinc-600">
 									<Loader2 size={28} className="animate-spin" aria-hidden="true" />
 									<p className="text-xs font-bold uppercase tracking-wide">{t('loading' as any)}</p>
 								</div>
+							) : viewMode === 'multi_ai' ? (
+								selectedMultiVideos.length > 0 ? (
+									<div className="grid h-full w-full gap-2 p-2 sm:grid-cols-2 xl:grid-cols-3">
+										{multiStreamDescriptors.map(({ video, cameraId }) => {
+											const streamState = multiAiStates[cameraId]?.state ?? 'stopped';
+											const streamLabel = aiStateLabelMap[streamState];
+											return (
+												<div key={cameraId} className="relative min-h-[220px] overflow-hidden rounded-md border border-zinc-800 bg-black">
+													<canvas
+														ref={(node) => {
+															multiAiCanvasRefs.current[cameraId] = node;
+														}}
+														className="h-full w-full object-contain"
+														aria-label={`${video.name} AI annotated stream`}
+													/>
+													<div className="absolute left-3 top-3 max-w-[calc(100%-1.5rem)] rounded-md border border-white/10 bg-black/70 px-3 py-1.5">
+														<p className="truncate text-[10px] font-mono font-bold uppercase tracking-wider text-white">{video.name}</p>
+													</div>
+													<div className={`absolute bottom-3 left-3 flex items-center gap-2 rounded-md border px-3 py-1.5 ${streamState === 'running' ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : streamState === 'error' ? 'border-red-500/30 bg-red-500/15 text-red-300' : streamState === 'no_frames' ? 'border-amber-500/30 bg-amber-500/15 text-amber-300' : streamState === 'starting' ? 'border-vs-orange/30 bg-vs-orange/15 text-vs-orange' : 'border-zinc-700 bg-zinc-900/80 text-zinc-400'}`}>
+														<span className={`h-2 w-2 rounded-full ${streamState === 'running' ? 'animate-pulse bg-emerald-400' : streamState === 'error' ? 'bg-red-400' : streamState === 'no_frames' ? 'bg-amber-400' : streamState === 'starting' ? 'animate-pulse bg-vs-orange' : 'bg-zinc-500'}`} />
+														<span className="text-[10px] font-mono font-bold uppercase tracking-wider">{streamLabel}</span>
+													</div>
+													{streamState !== 'running' && (
+														<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 p-4 text-center text-zinc-500">
+															<Cpu size={28} className={streamState === 'starting' ? 'animate-pulse text-vs-orange' : 'text-zinc-600'} aria-hidden="true" />
+															<p className="text-xs font-bold uppercase tracking-wide text-zinc-300">{streamLabel}</p>
+														</div>
+													)}
+												</div>
+											);
+										})}
+									</div>
+								) : (
+									<EmptySourceState message="Select sources for Multi-Camera AI" />
+								)
 							) : selectedVideo ? (
 								viewMode === 'file' ? (
 									<video
@@ -938,7 +1215,7 @@ const LiveMonitoring = () => {
 								</div>
 							</div>
 
-							{selectedVideo && (
+							{(selectedVideo || (viewMode === 'multi_ai' && selectedMultiVideos.length > 0)) && (
 								<button
 									type="button"
 									onClick={() => setIsMaximized(true)}
@@ -970,6 +1247,8 @@ const LiveMonitoring = () => {
 											onDelete={() => handleDeleteSource(video)}
 											isDeleting={deletingSourceId === video.id}
 											isEditing={editingSourceId === video.id}
+											isMultiSelect={viewMode === 'multi_ai'}
+											isMultiSelected={selectedMultiVideoIds.includes(video.id)}
 										/>
 									))}
 								</div>
@@ -1029,7 +1308,7 @@ const LiveMonitoring = () => {
 					</div>
 				</div>
 			</div>
-			{isMaximized && selectedVideo && (
+			{isMaximized && (selectedVideo || (viewMode === 'multi_ai' && selectedMultiVideos.length > 0)) && (
 				<div
 					className="fixed inset-0 z-50 flex bg-zinc-950/95 p-3 backdrop-blur-sm sm:p-5"
 					role="dialog"
@@ -1037,7 +1316,32 @@ const LiveMonitoring = () => {
 					aria-label="Maximized live monitoring preview"
 				>
 					<div className="relative flex min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-2xl">
-						{viewMode === 'file' ? (
+						{viewMode === 'multi_ai' ? (
+							<div className="grid h-full w-full gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+								{multiStreamDescriptors.map(({ video, cameraId }) => {
+									const streamState = multiAiStates[cameraId]?.state ?? 'stopped';
+									const streamLabel = aiStateLabelMap[streamState];
+									return (
+										<div key={`fullscreen-${cameraId}`} className="relative min-h-[280px] overflow-hidden rounded-md border border-zinc-800 bg-black">
+											<canvas
+												ref={(node) => {
+													fullscreenMultiAiCanvasRefs.current[cameraId] = node;
+												}}
+												className="h-full w-full object-contain"
+												aria-label={`${video.name} maximized AI annotated stream`}
+											/>
+											<div className="absolute left-3 top-3 max-w-[calc(100%-1.5rem)] rounded-md border border-white/10 bg-black/70 px-3 py-1.5">
+												<p className="truncate text-[10px] font-mono font-bold uppercase tracking-wider text-white">{video.name}</p>
+											</div>
+											<div className={`absolute bottom-3 left-3 flex items-center gap-2 rounded-md border px-3 py-1.5 ${streamState === 'running' ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : streamState === 'error' ? 'border-red-500/30 bg-red-500/15 text-red-300' : streamState === 'no_frames' ? 'border-amber-500/30 bg-amber-500/15 text-amber-300' : streamState === 'starting' ? 'border-vs-orange/30 bg-vs-orange/15 text-vs-orange' : 'border-zinc-700 bg-zinc-900/80 text-zinc-400'}`}>
+												<span className={`h-2 w-2 rounded-full ${streamState === 'running' ? 'animate-pulse bg-emerald-400' : streamState === 'error' ? 'bg-red-400' : streamState === 'no_frames' ? 'bg-amber-400' : streamState === 'starting' ? 'animate-pulse bg-vs-orange' : 'bg-zinc-500'}`} />
+												<span className="text-[10px] font-mono font-bold uppercase tracking-wider">{streamLabel}</span>
+											</div>
+										</div>
+									);
+								})}
+							</div>
+						) : viewMode === 'file' && selectedVideo ? (
 							<video
 								key={`fullscreen-${selectedVideo.streamUrl}`}
 								src={selectedVideo.streamUrl}
@@ -1049,7 +1353,7 @@ const LiveMonitoring = () => {
 								preload="metadata"
 								onError={() => setJobError('Unable to load this video source in fullscreen view.')}
 							/>
-						) : (
+						) : selectedVideo ? (
 							<div className="relative h-full w-full">
 								<canvas ref={fullscreenAiCanvasRef} className="h-full w-full object-contain" aria-label="Maximized AI annotated stream" />
 								<div className={`absolute bottom-4 left-4 flex items-center gap-2 rounded-md border px-3 py-1.5 ${aiStateBadgeClass}`}>
@@ -1065,7 +1369,7 @@ const LiveMonitoring = () => {
 									</div>
 								)}
 							</div>
-						)}
+						) : null}
 
 						{viewMode === 'file' && !isPlaying && (
 							<div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/55 p-6 text-center text-zinc-400">
@@ -1078,7 +1382,7 @@ const LiveMonitoring = () => {
 						<div className="absolute left-4 top-4 flex items-center gap-2 rounded-md border border-white/10 bg-black/70 px-3 py-1.5">
 							<div className={`h-2 w-2 rounded-full ${jobStatus.running ? 'animate-pulse bg-emerald-500' : 'bg-zinc-600'}`} />
 							<span className="text-[10px] font-mono font-bold uppercase tracking-wider text-white">
-								{viewMode === 'ai' ? 'AI' : t('file' as any)} • {selectedVideo.name}
+								{viewMode === 'multi_ai' ? `Multi AI • ${selectedMultiVideos.length} sources` : `${viewMode === 'ai' ? 'AI' : t('file' as any)} • ${selectedVideo?.name ?? ''}`}
 							</span>
 						</div>
 						<div className="absolute right-4 top-4 flex items-center gap-2">

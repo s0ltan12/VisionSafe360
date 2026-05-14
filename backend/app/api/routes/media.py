@@ -26,6 +26,7 @@ router = APIRouter(
 _VIDEOS_DIR = Path(__file__).resolve().parents[3] / "edge_ai" / "vids_test"
 _MAX_UPLOAD_BYTES = int(os.getenv("MEDIA_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024)))
 _CHUNK_SIZE = 1024 * 1024
+_PREVIEW_JPEG_QUALITY = int(os.getenv("MEDIA_PREVIEW_JPEG_QUALITY", "92"))
 
 # Severity color coding in BGR (OpenCV format)
 _COLOR_HIGH   = (0, 0, 255)    # Red
@@ -257,7 +258,7 @@ def video_feed(video_name: str):
                     _, prev_gray = _detect_lightweight_events(frame, prev_gray)
                 _annotate_ai_results(frame, cached_detections)
                 _annotate_timestamp(frame)
-                ok, buffer = cv2.imencode(".jpg", frame)
+                ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _PREVIEW_JPEG_QUALITY])
                 if not ok:
                     continue
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"

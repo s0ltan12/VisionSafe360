@@ -24,8 +24,9 @@ import cv2
 logger = logging.getLogger("visionsafe.streaming.frame_publisher")
 
 # Publish at most this many frames per second to avoid flooding Redis.
-_DEFAULT_MAX_FPS = 12
-_DEFAULT_JPEG_QUALITY = 70
+_DEFAULT_MAX_FPS = 15
+_DEFAULT_JPEG_QUALITY = 92
+_DEFAULT_MAX_WIDTH = 0
 
 
 class FramePublisher:
@@ -42,6 +43,7 @@ class FramePublisher:
         self._signal_channel = f"visionsafe:stream:{camera_id}:signals"
         self._max_fps = max_fps or int(os.getenv("VISIONSAFE_STREAM_MAX_FPS", str(_DEFAULT_MAX_FPS)))
         self._jpeg_quality = jpeg_quality or int(os.getenv("VISIONSAFE_STREAM_JPEG_QUALITY", str(_DEFAULT_JPEG_QUALITY)))
+        self._max_width = int(os.getenv("VISIONSAFE_STREAM_MAX_WIDTH", str(_DEFAULT_MAX_WIDTH)))
         self._frame_ttl_seconds = int(os.getenv("VISIONSAFE_STREAM_FRAME_TTL_SECONDS", "10"))
         self._min_interval = 1.0 / max(1, self._max_fps)
         self._last_publish: float = 0.0
@@ -73,8 +75,8 @@ class FramePublisher:
             self._redis.ping()
             self._available = True
             logger.info(
-                "Frame publisher connected to Redis %s:%s key=%s signal=%s max_fps=%d quality=%d",
-                host, port, self._latest_key, self._signal_channel, self._max_fps, self._jpeg_quality,
+                "Frame publisher connected to Redis %s:%s key=%s signal=%s max_fps=%d quality=%d max_width=%d",
+                host, port, self._latest_key, self._signal_channel, self._max_fps, self._jpeg_quality, self._max_width,
             )
         except Exception as exc:
             self._available = False
@@ -98,11 +100,12 @@ class FramePublisher:
             return False
 
         try:
-            # Resize for bandwidth: max 960px wide
+            # Preserve source resolution by default. Operators can opt into a
+            # bandwidth cap with VISIONSAFE_STREAM_MAX_WIDTH when needed.
             h, w = frame.shape[:2]
-            if w > 960:
-                scale = 960 / w
-                frame = cv2.resize(frame, (960, int(h * scale)))
+            if self._max_width > 0 and w > self._max_width:
+                scale = self._max_width / w
+                frame = cv2.resize(frame, (self._max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
 
             ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality])
             if not ok:
