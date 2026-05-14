@@ -306,6 +306,7 @@ const LiveMonitoring = () => {
 	const [uploadBusy, setUploadBusy] = useState(false);
 	const [isMaximized, setIsMaximized] = useState(false);
 	const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+	const [aiSessionActive, setAiSessionActive] = useState(false);
 
 	const selectedVideo = useMemo(
 		() => videos.find((video) => video.id === selectedVideoId) ?? null,
@@ -392,9 +393,13 @@ const LiveMonitoring = () => {
 				return;
 			}
 			setAiState('starting');
+			setAiSessionActive(true);
 			await startJobForVideo(selectedVideo, 'cam_01');
 		} catch (error: any) {
-			if (viewMode === 'ai') setAiState('error');
+			if (viewMode === 'ai') {
+				setAiSessionActive(false);
+				setAiState('error');
+			}
 			setJobError(error?.message ?? (viewMode === 'ai' ? 'Failed to start AI worker' : 'Browser blocked video playback. Press Start again or use a supported browser.'));
 		} finally {
 			setJobBusy(false);
@@ -412,6 +417,7 @@ const LiveMonitoring = () => {
 				setIsPlaying(false);
 			}
 			if (viewMode === 'ai') {
+				setAiSessionActive(false);
 				setAiState('stopped');
 			}
 			if (jobStatus.running) {
@@ -424,7 +430,10 @@ const LiveMonitoring = () => {
 			}
 		} catch (error: any) {
 			setJobError(error?.message ?? 'Failed to stop worker job');
-			if (viewMode === 'ai') setAiState('error');
+			if (viewMode === 'ai') {
+				setAiSessionActive(false);
+				setAiState('error');
+			}
 		} finally {
 			setJobBusy(false);
 		}
@@ -470,6 +479,8 @@ const LiveMonitoring = () => {
 	const handleSelectVideo = useCallback((video: DemoVideo) => {
 		videoPlayerRef.current?.pause();
 		setIsPlaying(false);
+		setAiSessionActive(false);
+		setAiState('stopped');
 		setSelectedVideoId(video.id);
 	}, []);
 
@@ -489,6 +500,7 @@ const LiveMonitoring = () => {
 					await JobsAPI.stop();
 					await waitForJobIdle();
 				}
+				setAiSessionActive(false);
 				setAiState('stopped');
 			}
 			await DemoVideosAPI.delete(video.fileName);
@@ -585,7 +597,7 @@ const LiveMonitoring = () => {
 	}, [upsertIncident]);
 
 	useEffect(() => {
-		if (viewMode !== 'ai' || !jobStatus.running) {
+		if (viewMode !== 'ai' || !jobStatus.running || !aiSessionActive) {
 			if (viewMode === 'ai' && !jobBusy) setAiState('stopped');
 			return undefined;
 		}
@@ -652,7 +664,7 @@ const LiveMonitoring = () => {
 			ws.close();
 			aiWsRef.current = null;
 		};
-	}, [activeCameraId, jobBusy, jobStatus.running, viewMode]);
+	}, [activeCameraId, aiSessionActive, jobBusy, jobStatus.running, viewMode]);
 
 	useEffect(() => {
 		if (!isMaximized) return undefined;
