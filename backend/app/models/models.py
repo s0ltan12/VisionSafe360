@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum as PgEnum,
-    Float, Index, Integer, String, Text,
+    Float, Index, Integer, String, Text, JSON,
 )
 
 from ..config.database import Base
@@ -21,6 +21,7 @@ from ..config.database import Base
 # ── Enumerations ─────────────────────────────────────────────────────
 
 class SeverityEnum(str, enum.Enum):
+    Critical = "Critical"
     High = "High"
     Medium = "Medium"
     Low = "Low"
@@ -32,6 +33,8 @@ class StatusEnum(str, enum.Enum):
     Acknowledged = "Acknowledged"
     In_Investigation = "In Investigation"
     Resolved = "Resolved"
+    Archived = "Archived"
+    False_Positive = "False Positive"
     Dismissed = "Dismissed"
     Active = "Active"
 
@@ -71,6 +74,8 @@ class Alert(Base):
         Index("ix_alerts_type", "type"),
         Index("ix_alerts_severity", "severity"),
         Index("ix_alerts_zone", "zone"),
+        Index("ix_alerts_area_id", "area_id"),
+        Index("ix_alerts_zone_id", "zone_id"),
         Index("ix_alerts_camera_id", "camera_id"),
         Index("ix_alerts_worker_id", "worker_id"),
         Index("ix_alerts_status", "status"),
@@ -81,17 +86,94 @@ class Alert(Base):
     type        = Column(PgEnum(HazardTypeEnum, name="hazardtype", create_type=False), nullable=False)
     severity    = Column(PgEnum(SeverityEnum,   name="severity",   create_type=False), nullable=False)
     zone        = Column(String, nullable=False)
+    area_id     = Column(String, nullable=True)
+    area_name   = Column(String, nullable=True)
+    zone_id     = Column(String, nullable=True)
+    zone_name   = Column(String, nullable=True)
+    location_description = Column(Text, nullable=True)
     camera      = Column(String, nullable=False)
     camera_id   = Column(String, nullable=True)
     camera_name = Column(String, nullable=True)
     worker_id   = Column(String, nullable=True)
     worker_gpu_id = Column(String, nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
-    status      = Column(PgEnum(StatusEnum, name="status", create_type=False), default=StatusEnum.New)
+    status      = Column(
+        PgEnum(
+            StatusEnum,
+            name="status",
+            create_type=False,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        default=StatusEnum.New,
+    )
     description = Column(Text, nullable=False)
     thumbnail   = Column(String, nullable=True)
     confidence  = Column(Float, nullable=True)
+    acknowledged_by = Column(String, nullable=True)
+    acknowledged_by_id = Column(String, nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by = Column(String, nullable=True)
+    resolved_by_id = Column(String, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    archived_by = Column(String, nullable=True)
+    archived_by_id = Column(String, nullable=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    false_positive_by = Column(String, nullable=True)
+    false_positive_by_id = Column(String, nullable=True)
+    false_positive_at = Column(DateTime(timezone=True), nullable=True)
     created_at  = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class AlertEvent(Base):
+    """Append-only alert lifecycle timeline entry."""
+    __tablename__ = "alert_events"
+    __table_args__ = (
+        Index("ix_alert_events_alert_id", "alert_id"),
+        Index("ix_alert_events_created_at", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    alert_id = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    previous_status = Column(String, nullable=True)
+    new_status = Column(String, nullable=True)
+    actor_id = Column(String, nullable=True)
+    actor_name = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    event_metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class Area(Base):
+    """Operational area inside the monitored facility."""
+    __tablename__ = "areas"
+    __table_args__ = (
+        Index("ix_areas_name", "name"),
+        Index("ix_areas_risk_level", "risk_level"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    risk_level = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class Zone(Base):
+    """Safety zone within an operational area."""
+    __tablename__ = "zones"
+    __table_args__ = (
+        Index("ix_zones_area_id", "area_id"),
+        Index("ix_zones_name", "name"),
+        Index("ix_zones_risk_level", "risk_level"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    area_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    risk_level = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
 
 class Camera(Base):
@@ -103,9 +185,16 @@ class Camera(Base):
 
     id             = Column(String, primary_key=True, index=True)
     name           = Column(String, nullable=False)
+    area_id        = Column(String, nullable=True)
+    area_name      = Column(String, nullable=True)
+    zone_id        = Column(String, nullable=True)
+    zone_name      = Column(String, nullable=True)
     zone           = Column(String, nullable=False)
     url            = Column(String, nullable=True)
     stream_url     = Column(String(512), nullable=True)  # RTSP/stream source for AI detection
+    location_description = Column(Text, nullable=True)
+    supported_ai_capabilities = Column(JSON, nullable=True)
+    severity_profile = Column(String, nullable=True)
     status         = Column(String, default="Online")
     is_privacy_mode = Column(Boolean, default=False)
     thumbnail      = Column(String, nullable=True)

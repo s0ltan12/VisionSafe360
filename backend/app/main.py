@@ -30,6 +30,7 @@ from .api.websocket.ws_stream import router as stream_ws_router
 from .config.database import Base, engine
 from .config.settings import settings
 from .seed import seed
+from .services.schema_maintenance import ensure_alert_lifecycle_schema
 from .utils.audit_logger import ensure_request_id, get_client_ip_from_request, get_audit_logger
 from .utils.logging_config import setup_logging
 from .utils.security import validate_security_config
@@ -91,9 +92,13 @@ def startup() -> None:
     init_sentry(environment="production" if not settings.DEBUG else "development")
     get_audit_logger()
     validate_security_config()
+    ensure_alert_lifecycle_schema(engine)
     # Create all tables; Alembic migrations handle schema upgrades.
     Base.metadata.create_all(bind=engine)
-    seed()
+    if settings.SEED_DATA:
+        seed()
+    else:
+        logger.info("Database seeding skipped (SEED_DATA=false)")
 
 
 @app.get("/")

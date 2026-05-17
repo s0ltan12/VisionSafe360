@@ -1,6 +1,8 @@
 """ORM model exports."""
 from .models import (
     Alert,
+    AlertEvent,
+    Area,
     Camera,
     ErgonomicRecord,
     HazardTypeEnum,
@@ -12,10 +14,13 @@ from .models import (
     SystemConfig,
     User,
     UserRoleEnum,
+    Zone,
 )
 
 __all__ = [
     "Alert",
+    "AlertEvent",
+    "Area",
     "Camera",
     "ErgonomicRecord",
     "HazardTypeEnum",
@@ -27,4 +32,5 @@ __all__ = [
     "SystemConfig",
     "User",
     "UserRoleEnum",
+    "Zone",
 ]

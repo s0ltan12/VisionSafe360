@@ -1,6 +1,7 @@
 """Pydantic schema exports."""
 from .schemas import (
     AlertCreate,
+    AlertEventOut,
     AlertOut,
     AlertUpdate,
     CameraCreate,
@@ -29,7 +30,7 @@ from .schemas import (
 )
 
 __all__ = [
-    "AlertCreate", "AlertOut", "AlertUpdate",
+    "AlertCreate", "AlertEventOut", "AlertOut", "AlertUpdate",
     "CameraCreate", "CameraOut", "CameraUpdate",
     "ErgonomicRecordCreate", "ErgonomicRecordOut",
     "IncidentCreate", "IncidentOut", "IncidentUpdate",

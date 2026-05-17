@@ -7,6 +7,7 @@ import {
   PlayCircle,
   MessageSquare,
   CheckCircle,
+  CircleDot,
   AlertOctagon,
   Clock,
   MapPin,
@@ -16,9 +17,11 @@ import {
   FileText,
   MoreHorizontal,
   ChevronUp,
-  Trash2
+  Trash2,
+  ImageOff,
+  XCircle
 } from 'lucide-react';
-import { Alert as AlertType, Severity, Status, HazardType } from '../types';
+import { Alert as AlertType, AlertEvent, Severity, Status, HazardType } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AlertsAPI } from '../api';
 import { a11yClasses } from '../utils/accessibility';
@@ -27,7 +30,10 @@ const StatusPill = ({ status }: { status: Status }) => {
   const styles: Record<string, string> = {
     New: 'bg-blue-900/30 text-blue-400 border-blue-800',
     Acknowledged: 'bg-vs-orange/10 text-vs-orange border-vs-orange/30',
+    'In Investigation': 'bg-purple-900/30 text-purple-300 border-purple-700',
     Resolved: 'bg-emerald-900/30 text-emerald-400 border-emerald-800',
+    Archived: 'bg-zinc-800 text-zinc-400 border-zinc-700',
+    'False Positive': 'bg-zinc-800 text-zinc-400 border-zinc-700',
     Dismissed: 'bg-zinc-800 text-zinc-500 border-zinc-700',
   };
   const { t } = useLanguage();
@@ -42,8 +48,102 @@ const StatusPill = ({ status }: { status: Status }) => {
   );
 };
 
-const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: { alert: AlertType, onClose: () => void, onAcknowledge: () => void, onResolve: () => void, onEscalate: () => void }) => {
+const SeverityBadge = ({ severity }: { severity: Severity }) => {
+  const styles: Record<string, string> = {
+    Critical: 'text-red-200 bg-red-600/20 border-red-500/40',
+    High: 'text-red-400 bg-red-500/10 border-red-500/25',
+    Medium: 'text-vs-orange bg-vs-orange/10 border-vs-orange/25',
+    Low: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/25',
+  };
+  return (
+    <span className={`px-2 py-1 rounded border text-[10px] uppercase font-bold tracking-wider ${styles[severity] || styles.Medium}`}>
+      {severity}
+    </span>
+  );
+};
+
+const formatConfidence = (confidence?: number | null) => {
+  if (confidence === null || confidence === undefined || Number.isNaN(Number(confidence))) {
+    return '—';
+  }
+  const value = Number(confidence);
+  return `${value > 1 ? value.toFixed(1) : (value * 100).toFixed(1)}%`;
+};
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+};
+
+const formatTimelineAction = (action: string) => {
+  const labels: Record<string, string> = {
+    created: 'Alert created',
+    acknowledged: 'Acknowledged',
+    investigating: 'Investigation started',
+    resolved: 'Resolved',
+    false_positive: 'Marked false positive',
+    archived: 'Archived',
+  };
+  return labels[action] || action.replace(/_/g, ' ');
+};
+
+const formatResolution = (alert: AlertType) => {
+  if (alert.frameWidth && alert.frameHeight) {
+    return `${alert.frameWidth}x${alert.frameHeight}`;
+  }
+  return 'Captured frame';
+};
+
+const formatLocationLine = (alert: AlertType) => {
+  const parts = [alert.areaName, alert.zoneName].filter(Boolean);
+  if (parts.length > 0) {
+    return parts.join(' / ');
+  }
+  return alert.zone || 'Unassigned';
+};
+
+const EvidencePlaceholder = ({ compact = false }: { compact?: boolean }) => (
+  <div className={`w-full h-full flex ${compact ? 'items-center justify-center' : 'items-center justify-center flex-col gap-3'} bg-zinc-950 text-zinc-600`}>
+    <ImageOff size={compact ? 18 : 40} aria-hidden="true" />
+    {!compact && (
+      <div className="text-center">
+        <p className="text-sm font-semibold text-zinc-400">No evidence frame captured</p>
+        <p className="text-xs text-zinc-600 mt-1">New hazard alerts will include the annotated frame.</p>
+      </div>
+    )}
+  </div>
+);
+
+const AlertDetails = ({
+  alert,
+  onClose,
+  onAcknowledge,
+  onResolve,
+  onFalsePositive,
+  onEscalate,
+  actionError,
+  updatingAlertId,
+  timeline,
+  timelineLoading,
+  timelineError,
+}: {
+  alert: AlertType,
+  onClose: () => void,
+  onAcknowledge: () => void,
+  onResolve: () => void,
+  onFalsePositive: () => void,
+  onEscalate: () => void,
+  actionError: string | null,
+  updatingAlertId: string | null,
+  timeline: AlertEvent[],
+  timelineLoading: boolean,
+  timelineError: string | null,
+}) => {
   const { t } = useLanguage();
+  const hasEvidence = Boolean(alert.thumbnail);
+  const confidenceLabel = formatConfidence(alert.confidence);
   
   return (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-label={`Alert details: ${alert.id}`}>
@@ -54,6 +154,7 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
             {t('alertDetails')} <span className="mx-2 text-zinc-600">/</span> <span className="font-mono text-vs-orange">{alert.id}</span>
           </h2>
           <StatusPill status={alert.status} />
+          <SeverityBadge severity={alert.severity} />
         </div>
         <div className="flex items-center space-x-2 rtl:space-x-reverse">
            <button 
@@ -86,23 +187,33 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col bg-black p-6 overflow-y-auto">
              <div className="relative aspect-video bg-zinc-900 rounded-lg overflow-hidden border border-zinc-800 mb-4 group shadow-2xl">
-               <img 
-                 src={alert.thumbnail} 
-                 alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
-                 className="w-full h-full object-cover opacity-90" 
-               />
+               {hasEvidence ? (
+                 <img
+                   src={alert.thumbnail || ''}
+                   alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
+                   className="w-full h-full object-cover opacity-90"
+                 />
+               ) : (
+                 <EvidencePlaceholder />
+               )}
                <div className="absolute top-4 start-4 bg-black/70 backdrop-blur px-3 py-1.5 rounded border border-white/10 flex items-center space-x-2 rtl:space-x-reverse">
                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
-                  <span className="text-white text-xs font-mono uppercase tracking-tighter">Event Capture • {alert.timestamp}</span>
+                  <span className="text-white text-xs font-mono uppercase tracking-tighter">{hasEvidence ? 'Evidence Capture' : 'Alert Record'} • {alert.timestamp}</span>
                </div>
                
-               <div className="absolute inset-0 pointer-events-none">
-                  <div className="absolute top-1/4 left-1/3 w-32 h-48 border-2 border-vs-orange/80 shadow-[0_0_15px_rgba(255,106,0,0.5)]">
-                     <div className="bg-vs-orange text-black text-[9px] font-bold px-1.5 py-0.5 absolute -top-5 left-0">Violation: {alert.type} {alert.confidence}%</div>
-                  </div>
-               </div>
+               {hasEvidence && (
+                 <div className="absolute bottom-4 start-4 end-4 pointer-events-none">
+                   <div className="inline-flex max-w-full items-center gap-3 rounded border border-vs-orange/40 bg-black/75 px-3 py-2 text-xs font-mono text-zinc-200 backdrop-blur">
+                     <span className="font-bold uppercase text-vs-orange">{alert.type}</span>
+                     <span className="text-zinc-600">|</span>
+                     <span>{alert.cameraName || alert.cameraId || alert.camera}</span>
+                     <span className="text-zinc-600">|</span>
+                     <span>Confidence {confidenceLabel}</span>
+                   </div>
+                 </div>
+               )}
              </div>
-             <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                 <div className="bg-[#0f0f11] border border-zinc-800 rounded p-4 flex items-start space-x-3 rtl:space-x-reverse">
                    <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 text-blue-500"><AlertOctagon size={18} aria-hidden="true" /></div>
                    <div className="flex-1">
@@ -114,7 +225,8 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
                    <div className="p-2 bg-vs-orange/10 rounded border border-vs-orange/20 text-vs-orange"><MapPin size={18} aria-hidden="true" /></div>
                    <div className="flex-1">
                       <h4 className="text-[10px] font-bold text-zinc-500 uppercase mb-2">Geolocation Data</h4>
-                      <p className="text-sm text-zinc-200">{alert.zone}</p>
+                      <p className="text-sm text-zinc-200">{formatLocationLine(alert)}</p>
+                      <p className="text-[11px] text-zinc-500 mt-1">{alert.cameraName || alert.camera}</p>
                    </div>
                 </div>
              </div>
@@ -122,10 +234,16 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
         <div className="w-96 bg-[#0f0f11] border-s border-zinc-800 flex flex-col p-6 shadow-xl">
            <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-6 opacity-60">System Actions</h3>
            <div className="space-y-3">
+              {actionError && (
+                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-300" role="alert">
+                  {actionError}
+                </div>
+              )}
               {alert.status === 'New' && (
                 <button 
-                  className={`w-full py-3 bg-vs-orange hover:bg-vs-lightOrange text-black font-bold rounded text-xs uppercase tracking-widest transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
+                  className={`w-full py-3 bg-vs-orange hover:bg-vs-lightOrange text-black font-bold rounded text-xs uppercase tracking-widest transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
                   onClick={onAcknowledge}
+                  disabled={updatingAlertId === alert.id}
                   aria-label="Acknowledge this alert"
                 >
                    <CheckCircle size={16} aria-hidden="true" />
@@ -134,12 +252,24 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
               )}
               {(alert.status === 'New' || alert.status === 'Acknowledged') && (
                 <button 
-                  className={`w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs uppercase tracking-widest transition-all flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
+                  className={`w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs uppercase tracking-widest transition-all flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
                   onClick={onResolve}
+                  disabled={updatingAlertId === alert.id}
                   aria-label="Resolve this alert"
                 >
                    <CheckCircle size={16} aria-hidden="true" />
                    <span>{t('resolve')}</span>
+                </button>
+              )}
+              {(alert.status === 'New' || alert.status === 'Acknowledged' || alert.status === 'In Investigation') && (
+                <button
+                  className={`w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold rounded text-xs uppercase tracking-widest transition-all border border-zinc-700 flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
+                  onClick={onFalsePositive}
+                  disabled={updatingAlertId === alert.id}
+                  aria-label="Mark this alert as false positive"
+                >
+                  <XCircle size={16} aria-hidden="true" />
+                  <span>False Positive</span>
                 </button>
               )}
               <button 
@@ -155,15 +285,53 @@ const AlertDetails = ({ alert, onClose, onAcknowledge, onResolve, onEscalate }: 
            <div className="mt-8 border-t border-zinc-800 pt-6">
               <h4 className="text-[10px] font-bold text-zinc-600 uppercase mb-4 tracking-widest">Metadata</h4>
               <div className="space-y-2 text-[11px] font-mono text-zinc-500">
-                 <div className="flex justify-between"><span>Frame ID:</span><span className="text-zinc-300">FR-{Math.floor(Math.random() * 99999)}-X</span></div>
+                 <div className="flex justify-between"><span>Evidence:</span><span className="text-zinc-300">{hasEvidence ? 'Captured' : 'Not available'}</span></div>
+                 <div className="flex justify-between"><span>Frame:</span><span className="text-zinc-300">{alert.frameNumber ?? '—'}</span></div>
                  <div className="flex justify-between"><span>Camera:</span><span className="text-zinc-300">{alert.camera}</span></div>
                  <div className="flex justify-between"><span>Camera ID:</span><span className="text-zinc-300">{alert.cameraId || '—'}</span></div>
                  <div className="flex justify-between"><span>Camera Name:</span><span className="text-zinc-300">{alert.cameraName || '—'}</span></div>
                  <div className="flex justify-between"><span>Worker ID:</span><span className="text-zinc-300">{alert.workerId || '—'}</span></div>
                  <div className="flex justify-between"><span>Worker GPU:</span><span className="text-zinc-300">{alert.workerGpuId || '—'}</span></div>
-                 <div className="flex justify-between"><span>Resolution:</span><span className="text-zinc-300">1920x1080</span></div>
-                 <div className="flex justify-between"><span>Confidence:</span><span className="text-zinc-300">{alert.confidence}%</span></div>
+                 <div className="flex justify-between"><span>Resolution:</span><span className="text-zinc-300">{formatResolution(alert)}</span></div>
+                 <div className="flex justify-between"><span>Confidence:</span><span className="text-zinc-300">{confidenceLabel}</span></div>
+                 <div className="flex justify-between"><span>Acknowledged By:</span><span className="text-zinc-300">{alert.acknowledgedBy || '—'}</span></div>
+                 <div className="flex justify-between"><span>Acknowledged At:</span><span className="text-zinc-300 text-right">{formatDateTime(alert.acknowledgedAt)}</span></div>
+                 <div className="flex justify-between"><span>Resolved By:</span><span className="text-zinc-300">{alert.resolvedBy || '—'}</span></div>
+                 <div className="flex justify-between"><span>Resolved At:</span><span className="text-zinc-300 text-right">{formatDateTime(alert.resolvedAt)}</span></div>
               </div>
+           </div>
+
+           <div className="mt-8 border-t border-zinc-800 pt-6 min-h-0">
+              <h4 className="text-[10px] font-bold text-zinc-600 uppercase mb-4 tracking-widest">Lifecycle Timeline</h4>
+              {timelineLoading ? (
+                <div className="text-xs text-zinc-500">Loading timeline...</div>
+              ) : timelineError ? (
+                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{timelineError}</div>
+              ) : timeline.length === 0 ? (
+                <div className="text-xs text-zinc-500">No lifecycle events recorded.</div>
+              ) : (
+                <div className="space-y-4">
+                  {timeline.map((event, index) => (
+                    <div key={event.id} className="relative flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className="rounded-full border border-vs-orange/40 bg-vs-orange/10 p-1 text-vs-orange">
+                          <CircleDot size={12} aria-hidden="true" />
+                        </div>
+                        {index < timeline.length - 1 && <div className="mt-1 h-full min-h-8 w-px bg-zinc-800" aria-hidden="true" />}
+                      </div>
+                      <div className="min-w-0 pb-1">
+                        <div className="text-xs font-semibold text-zinc-200 capitalize">{formatTimelineAction(event.action)}</div>
+                        <div className="mt-1 text-[11px] font-mono text-zinc-500">{formatDateTime(event.createdAt)}</div>
+                        <div className="mt-1 text-[11px] text-zinc-400">
+                          {event.actorName || 'System'}
+                          {event.newStatus ? <span className="text-zinc-600">{` -> ${event.newStatus}`}</span> : null}
+                        </div>
+                        {event.note && <div className="mt-1 text-[11px] text-zinc-500">{event.note}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
            </div>
         </div>
       </div>
@@ -180,6 +348,11 @@ const Alerts = () => {
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [updatingAlertId, setUpdatingAlertId] = useState<string | null>(null);
+  const [timelineByAlertId, setTimelineByAlertId] = useState<Record<string, AlertEvent[]>>({});
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const { t } = useLanguage();
 
   const fetchAlerts = useCallback(async () => {
@@ -196,6 +369,36 @@ const Alerts = () => {
   useEffect(() => {
     fetchAlerts();
   }, [fetchAlerts]);
+
+  useEffect(() => {
+    if (!selectedAlert) return;
+    let cancelled = false;
+
+    const loadTimeline = async () => {
+      setTimelineError(null);
+      setTimelineLoading(true);
+      try {
+        const events = await AlertsAPI.getEvents(selectedAlert.id);
+        if (!cancelled) {
+          setTimelineByAlertId(prev => ({ ...prev, [selectedAlert.id]: events }));
+        }
+      } catch (e) {
+        console.error(`Failed to fetch alert timeline ${selectedAlert.id}:`, e);
+        if (!cancelled) {
+          setTimelineError('Failed to load lifecycle timeline.');
+        }
+      } finally {
+        if (!cancelled) {
+          setTimelineLoading(false);
+        }
+      }
+    };
+
+    void loadTimeline();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlert?.id]);
 
   const filteredAlerts = useMemo(() => {
     let result = alerts;
@@ -220,19 +423,43 @@ const Alerts = () => {
     return result;
   }, [alerts, searchQuery, severityFilter, typeFilter]);
 
-  const severityOptions: Severity[] = ['High', 'Medium', 'Low'];
+  const severityOptions: Severity[] = ['Critical', 'High', 'Medium', 'Low'];
   const typeOptions: HazardType[] = Array.from(new Set(alerts.map(a => a.type)));
 
-  const handleAcknowledge = () => {
+  const persistStatus = async (status: Status) => {
     if (!selectedAlert) return;
-    setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'Acknowledged' } : a));
-    setSelectedAlert(prev => prev ? { ...prev, status: 'Acknowledged' } : null);
+    const previous = selectedAlert;
+    setActionError(null);
+    setUpdatingAlertId(previous.id);
+    setAlerts(prev => prev.map(a => a.id === previous.id ? { ...a, status } : a));
+    setSelectedAlert(prev => prev ? { ...prev, status } : null);
+
+    try {
+      const updated = await AlertsAPI.update(previous.id, { status });
+      setAlerts(prev => prev.map(a => a.id === updated.id ? updated : a));
+      setSelectedAlert(prev => prev && prev.id === updated.id ? updated : prev);
+      const events = await AlertsAPI.getEvents(previous.id);
+      setTimelineByAlertId(prev => ({ ...prev, [previous.id]: events }));
+    } catch (e) {
+      console.error(`Failed to update alert ${previous.id}:`, e);
+      setAlerts(prev => prev.map(a => a.id === previous.id ? previous : a));
+      setSelectedAlert(previous);
+      setActionError('Failed to save alert status. Please try again.');
+    } finally {
+      setUpdatingAlertId(null);
+    }
+  };
+
+  const handleAcknowledge = () => {
+    void persistStatus('Acknowledged');
   };
 
   const handleResolve = () => {
-    if (!selectedAlert) return;
-    setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'Resolved' } : a));
-    setSelectedAlert(prev => prev ? { ...prev, status: 'Resolved' } : null);
+    void persistStatus('Resolved');
+  };
+
+  const handleFalsePositive = () => {
+    void persistStatus('False Positive');
   };
 
   const handleEscalate = () => {
@@ -240,8 +467,24 @@ const Alerts = () => {
     alert(`Escalating alert ${selectedAlert.id} to incident management`);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
+    const previousAlerts = alerts;
+    setActionError(null);
+    setUpdatingAlertId(id);
     setAlerts(prev => prev.filter(a => a.id !== id));
+    if (selectedAlert?.id === id) {
+      setSelectedAlert(null);
+    }
+
+    try {
+      await AlertsAPI.delete(id);
+    } catch (e) {
+      console.error(`Failed to delete alert ${id}:`, e);
+      setAlerts(previousAlerts);
+      setActionError('Failed to delete alert. Please try again.');
+    } finally {
+      setUpdatingAlertId(null);
+    }
   };
 
   return (
@@ -252,7 +495,13 @@ const Alerts = () => {
           onClose={() => setSelectedAlert(null)}
           onAcknowledge={handleAcknowledge}
           onResolve={handleResolve}
+          onFalsePositive={handleFalsePositive}
           onEscalate={handleEscalate}
+          actionError={actionError}
+          updatingAlertId={updatingAlertId}
+          timeline={timelineByAlertId[selectedAlert.id] || []}
+          timelineLoading={timelineLoading}
+          timelineError={timelineError}
         />
       )}
 
@@ -381,11 +630,15 @@ const Alerts = () => {
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3 rtl:space-x-reverse flex-1 min-w-0">
                       <div className="w-12 h-12 rounded-lg bg-black overflow-hidden border border-zinc-800 flex-shrink-0">
-                        <img 
-                          src={alert.thumbnail} 
-                          alt={`Alert thumbnail: ${alert.type}`}
-                          className="w-full h-full object-cover" 
-                        />
+                        {alert.thumbnail ? (
+                          <img
+                            src={alert.thumbnail}
+                            alt={`Alert thumbnail: ${alert.type}`}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <EvidencePlaceholder compact />
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
@@ -396,27 +649,19 @@ const Alerts = () => {
                           {alert.cameraId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Cam {alert.cameraId}</span>}
                           {alert.workerId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Worker {alert.workerId}</span>}
                         </div>
-                        <p className="text-xs text-zinc-500 mb-1">{alert.zone} • {alert.timestamp}</p>
+                        <p className="text-xs text-zinc-500 mb-1">{formatLocationLine(alert)} • {alert.timestamp}</p>
                         <p className="text-sm text-zinc-300 line-clamp-2">{alert.description}</p>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                      <div className={`px-2 py-1 rounded text-[10px] uppercase font-bold tracking-wider border ${
-                        alert.severity === 'High' ? 'text-red-500 bg-red-500/10 border-red-500/20' :
-                        alert.severity === 'Medium' ? 'text-vs-orange bg-vs-orange/10 border-vs-orange/20' :
-                        'text-yellow-500 bg-yellow-500/10 border-yellow-500/20'
-                      }`}
-                      role="img"
-                      aria-label={`Severity: ${alert.severity}`}
-                      >
-                        {alert.severity}
-                      </div>
+                      <SeverityBadge severity={alert.severity} />
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDelete(alert.id);
+                          void handleDelete(alert.id);
                         }}
-                        className={`p-1.5 hover:bg-red-500/20 rounded text-zinc-500 hover:text-red-500 transition-colors ${a11yClasses.focusRing}`}
+                        disabled={updatingAlertId === alert.id}
+                        className={`p-1.5 hover:bg-red-500/20 rounded text-zinc-500 hover:text-red-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${a11yClasses.focusRing}`}
                         aria-label={`Delete alert ${alert.id}`}
                       >
                         <Trash2 size={14} aria-hidden="true" />

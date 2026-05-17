@@ -61,14 +61,19 @@ const CameraManagement = () => {
   const [formName, setFormName] = useState('');
   const [formUrl, setFormUrl] = useState('');
   const [formStreamUrl, setFormStreamUrl] = useState('');
-  const [formZone, setFormZone] = useState('Zone A');
+  const [formAreaName, setFormAreaName] = useState('Factory Hall');
+  const [formZoneName, setFormZoneName] = useState('Production Line A');
+  const [formLocationDescription, setFormLocationDescription] = useState('');
 
   const handleAddCamera = async () => {
     if (!formName.trim()) return;
     const newCamera: CameraType = {
       id: `CAM-${String(cameras.length + 1).padStart(2, '0')}`,
       name: formName,
-      zone: formZone,
+      zone: `${formAreaName} / ${formZoneName}`,
+      areaName: formAreaName,
+      zoneName: formZoneName,
+      locationDescription: formLocationDescription || undefined,
       url: formUrl || undefined,
       stream_url: formStreamUrl || undefined,
       status: 'Online',
@@ -82,7 +87,7 @@ const CameraManagement = () => {
       setCameras(prev => [...prev, created]);
       setCardStates(prev => ({ ...prev, [created.id]: defaultCardState() }));
       setShowAddModal(false);
-      setFormName(''); setFormUrl(''); setFormStreamUrl(''); setFormZone('Zone A');
+      setFormName(''); setFormUrl(''); setFormStreamUrl(''); setFormAreaName('Factory Hall'); setFormZoneName('Production Line A'); setFormLocationDescription('');
     } catch (e) {
       console.error('Failed to add camera:', e);
     }
@@ -224,7 +229,10 @@ const CameraManagement = () => {
                 <div className="p-5 space-y-4">
                   <div>
                     <h3 className="text-white font-bold">{cam.name}</h3>
-                    <p className="text-xs text-zinc-500 uppercase tracking-wider">{cam.zone}</p>
+                    <p className="text-xs text-zinc-500 uppercase tracking-wider">{cam.areaName || 'Area'} / {cam.zoneName || cam.zone}</p>
+                    {cam.locationDescription && (
+                      <p className="text-[11px] text-zinc-600 mt-1">{cam.locationDescription}</p>
+                    )}
                   </div>
 
                   {/* RTSP URL display / editor */}
@@ -374,16 +382,33 @@ const CameraManagement = () => {
               </div>
               <div className="space-y-2">
                 <label className="text-xs font-bold text-zinc-500 uppercase">{t('location')}</label>
-                <select
-                  value={formZone}
-                  onChange={e => setFormZone(e.target.value)}
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    value={formAreaName}
+                    onChange={e => setFormAreaName(e.target.value)}
+                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    placeholder="Factory Hall"
+                  />
+                  <input
+                    type="text"
+                    value={formZoneName}
+                    onChange={e => setFormZoneName(e.target.value)}
+                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    placeholder="Production Line A"
+                  />
+                </div>
+                <p className="text-[10px] text-zinc-600">Area and zone appear on alerts and camera cards.</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase">Location Description</label>
+                <input
+                  type="text"
+                  value={formLocationDescription}
+                  onChange={e => setFormLocationDescription(e.target.value)}
                   className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
-                >
-                  <option>Zone A</option>
-                  <option>Zone B</option>
-                  <option>Zone C</option>
-                  <option>Zone D</option>
-                </select>
+                  placeholder="Mounted above conveyor entrance, facing worker lane"
+                />
               </div>
             </div>
             <div className="p-6 bg-zinc-900/30 flex justify-end space-x-3 rtl:space-x-reverse">

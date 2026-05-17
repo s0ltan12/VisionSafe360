@@ -35,6 +35,11 @@ class AlertBase(BaseModel):
     type: str
     severity: str
     zone: str
+    area_id: Optional[str] = None
+    area_name: Optional[str] = None
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
+    location_description: Optional[str] = None
     camera: str
     camera_id: Optional[str] = None
     camera_name: Optional[str] = None
@@ -48,6 +53,18 @@ class AlertBase(BaseModel):
     description: str
     thumbnail: Optional[str] = None
     confidence: Optional[float] = None
+    acknowledged_by: Optional[str] = None
+    acknowledged_by_id: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    resolved_by_id: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    archived_by: Optional[str] = None
+    archived_by_id: Optional[str] = None
+    archived_at: Optional[datetime] = None
+    false_positive_by: Optional[str] = None
+    false_positive_by_id: Optional[str] = None
+    false_positive_at: Optional[datetime] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -60,6 +77,7 @@ class AlertUpdate(BaseModel):
     status: Optional[str] = None
     severity: Optional[str] = None
     description: Optional[str] = None
+    note: Optional[str] = None
 
 
 class AlertOut(AlertBase):
@@ -70,13 +88,36 @@ class AlertOut(AlertBase):
         from_attributes = True
 
 
+class AlertEventOut(BaseModel):
+    id: str
+    alert_id: str
+    action: str
+    previous_status: Optional[str] = None
+    new_status: Optional[str] = None
+    actor_id: Optional[str] = None
+    actor_name: Optional[str] = None
+    note: Optional[str] = None
+    event_metadata: Optional[dict] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ── Cameras ───────────────────────────────────────────────────────────
 
 class CameraBase(BaseModel):
     name: str
     zone: str
+    area_id: Optional[str] = None
+    area_name: Optional[str] = None
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
     url: Optional[str] = None
     stream_url: Optional[str] = None  # RTSP/stream source for AI detection
+    location_description: Optional[str] = None
+    supported_ai_capabilities: Optional[list[str]] = None
+    severity_profile: Optional[str] = None
     status: str = "Online"
     is_privacy_mode: bool = False
     thumbnail: Optional[str] = None
@@ -91,8 +132,15 @@ class CameraCreate(CameraBase):
 class CameraUpdate(BaseModel):
     name: Optional[str] = None
     zone: Optional[str] = None
+    area_id: Optional[str] = None
+    area_name: Optional[str] = None
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
     url: Optional[str] = None
     stream_url: Optional[str] = None  # RTSP/stream source for AI detection
+    location_description: Optional[str] = None
+    supported_ai_capabilities: Optional[list[str]] = None
+    severity_profile: Optional[str] = None
     status: Optional[str] = None
     is_privacy_mode: Optional[bool] = None
     fps: Optional[float] = None
