@@ -12,7 +12,7 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
-import { Download, Calendar, TrendingUp, ShieldAlert, UserCheck } from 'lucide-react';
+import { Download, Calendar, TrendingUp, ShieldAlert, Activity, UserCheck } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AlertsAPI, AnalyticsAPI, IncidentsAPI } from '../api';
 import { Alert, AnalyticsStats, Incident } from '../types';

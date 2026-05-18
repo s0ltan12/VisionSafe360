@@ -13,14 +13,14 @@ from .api.routes.alerts import router as alerts_router
 from .api.routes.analytics import router as analytics_router
 from .api.routes.auth import router as auth_router
 from .api.routes.cameras import router as cameras_router
-from .api.routes.config_route import router as config_router
+from .api.routes.config import router as config_router
 from .api.routes.edge_config import router as edge_config_router
 from .api.routes.ergonomics import router as ergonomics_router
 from .api.routes.health import router as health_router
 from .api.routes.jobs import router as jobs_router
 from .api.routes.media import router as media_router
 from .api.routes.monitoring import router as monitoring_router
-from .api.routes.notifications_route import router as notifications_router
+from .api.routes.notifications import router as notifications_router
 from .api.routes.incidents import router as incidents_router
 from .api.routes.ingest import router as ingest_router
 from .api.routes.users import router as users_router
