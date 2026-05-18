@@ -12,10 +12,11 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
-import { Download, Calendar, TrendingUp, ShieldAlert, Activity, UserCheck } from 'lucide-react';
+import { Download, Calendar, TrendingUp, ShieldAlert, UserCheck } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AlertsAPI, AnalyticsAPI, IncidentsAPI } from '../api';
 import { Alert, AnalyticsStats, Incident } from '../types';
+import { Button, PageShell, Panel } from './ui';
 
 const COLORS = ['#FF6A00', '#FF8A3A', '#3b82f6', '#4b5563', '#10b981', '#ef4444'];
 
@@ -29,7 +30,7 @@ const formatTrend = (current: number, previous: number) => {
 };
 
 const KPICard = ({ label, value, trend, icon: Icon }: any) => (
-  <div className="bg-[#0f0f11] p-5 rounded-xl border border-zinc-800 hover:border-zinc-700 transition-colors">
+  <Panel className="hover:border-zinc-700 transition-colors">
     <div className="flex justify-between items-start mb-4">
       <div className="p-2 bg-zinc-900 rounded-lg border border-zinc-800 text-vs-orange">
         <Icon size={20} />
@@ -43,7 +44,7 @@ const KPICard = ({ label, value, trend, icon: Icon }: any) => (
     </div>
     <p className="text-2xl font-bold text-white mb-1">{value}</p>
     <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">{label}</p>
-  </div>
+  </Panel>
 );
 
 const EmptyPanel = ({ label }: { label: string }) => (
@@ -145,27 +146,24 @@ const Reports = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto">
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">{t('reports')}</h2>
-          <p className="text-sm text-zinc-500">Global safety trends and AI performance analytics.</p>
-        </div>
-        <div className="flex space-x-3 rtl:space-x-reverse">
-          <button className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors uppercase text-xs font-bold tracking-wider">
-            <Calendar size={18} />
-            <span>Last 7 Days</span>
-          </button>
-          <button
-          disabled={isExporting || loading || trendData.length === 0}
+    <PageShell
+      title={t('reports')}
+      description="Global safety trends and AI performance analytics."
+      actions={
+        <>
+          <Button icon={<Calendar size={18} />}>Last 7 Days</Button>
+          <Button
+            disabled={isExporting || loading || trendData.length === 0}
+            isLoading={isExporting}
             onClick={handleExport}
-            className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-vs-orange text-black rounded-lg hover:bg-vs-lightOrange text-sm font-bold shadow-glow transition-all disabled:opacity-50 disabled:cursor-not-allowed uppercase text-xs tracking-wider"
+            variant="primary"
+            icon={<Download size={18} />}
           >
-            {isExporting ? <Activity size={18} className="animate-spin" /> : <Download size={18} />}
-            <span>{isExporting ? 'Generating...' : t('exportCSV')}</span>
-          </button>
-        </div>
-      </div>
+            {isExporting ? 'Generating...' : t('exportCSV')}
+          </Button>
+        </>
+      }
+    >
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
@@ -186,7 +184,7 @@ const Reports = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-[#0f0f11] p-6 rounded-xl border border-zinc-800">
+        <Panel className="lg:col-span-2 p-6">
           <h3 className="font-bold text-white mb-6 uppercase text-[10px] tracking-widest opacity-60">Weekly Incident Trend</h3>
           {loading ? (
             <div className="h-[300px] animate-pulse rounded-lg bg-zinc-950/60" />
@@ -211,9 +209,9 @@ const Reports = () => {
           ) : (
             <EmptyPanel label="No incidents in this period" />
           )}
-        </div>
+        </Panel>
 
-        <div className="bg-[#0f0f11] p-6 rounded-xl border border-zinc-800">
+        <Panel className="p-6">
           <h3 className="font-bold text-white mb-6 uppercase text-[10px] tracking-widest opacity-60">Violation Distribution</h3>
           {loading ? (
             <div className="h-[300px] animate-pulse rounded-lg bg-zinc-950/60" />
@@ -242,9 +240,9 @@ const Reports = () => {
           ) : (
             <EmptyPanel label="No alerts by type yet" />
           )}
-        </div>
+        </Panel>
       </div>
-    </div>
+    </PageShell>
   );
 };
 

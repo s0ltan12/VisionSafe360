@@ -3,6 +3,7 @@ import { Cpu, HardDrive, Wifi, Activity, Server, Radio, Database, Gauge, ShieldC
 import { useLanguage } from '../contexts/LanguageContext';
 import { SystemHealthAPI } from '../api';
 import { SystemHealthCameraNode, SystemHealthSnapshot, SystemHealthWorkerNode } from '../types';
+import { Badge, PageShell, Panel } from './ui';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 B';
@@ -20,26 +21,26 @@ const formatAge = (seconds?: number | null) => {
 
 const statusTone = (status: string) => {
   const normalized = status.toLowerCase();
-  if (normalized === 'online' || normalized === 'alive') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-  if (normalized === 'stale' || normalized === 'queued') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-  return 'bg-red-500/10 text-red-400 border-red-500/20';
+  if (normalized === 'online' || normalized === 'alive' || normalized === 'running') return 'success';
+  if (normalized === 'stale' || normalized === 'queued') return 'warning';
+  return 'danger';
 };
 
 const MetricCard = ({ icon, label, value, detail }: { icon: React.ReactNode; label: string; value: string; detail: string }) => (
-  <div className="bg-[#0f0f11] p-5 rounded-xl border border-zinc-800 flex items-center gap-4">
+  <Panel className="flex items-center gap-4">
     <div className="text-vs-orange">{icon}</div>
     <div className="min-w-0">
       <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">{label}</p>
       <p className="text-xl font-bold text-white truncate">{value}</p>
       <p className="text-[10px] text-zinc-600 font-mono truncate">{detail}</p>
     </div>
-  </div>
+  </Panel>
 );
 
 const WorkerCard = ({ node }: { node: SystemHealthWorkerNode }) => {
   const load = Math.max(0, Math.min(100, node.loadPercent));
   return (
-    <div className="bg-[#0f0f11] border border-zinc-800 rounded-xl p-5 hover:border-vs-orange/40 transition-colors">
+    <Panel className="hover:border-vs-orange/40 transition-colors">
       <div className="flex justify-between items-start gap-4 mb-5">
         <div className="flex items-center gap-3 min-w-0">
           <div className="p-2 bg-zinc-900 rounded-lg text-zinc-300">
@@ -50,9 +51,9 @@ const WorkerCard = ({ node }: { node: SystemHealthWorkerNode }) => {
             <p className="text-[10px] text-zinc-600 font-mono truncate">{node.hostname || node.id}</p>
           </div>
         </div>
-        <span className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase ${statusTone(node.status)}`}>
+        <Badge tone={statusTone(node.status)}>
           {node.status}
-        </span>
+        </Badge>
       </div>
 
       <div className="grid grid-cols-2 gap-4 mb-4">
@@ -73,14 +74,14 @@ const WorkerCard = ({ node }: { node: SystemHealthWorkerNode }) => {
         <span className="truncate">GPU: {node.gpuId || 'CPU'}</span>
         <span className="truncate text-right">Queue: {node.queue || 'edge-worker'}</span>
       </div>
-    </div>
+    </Panel>
   );
 };
 
 const CameraCard = ({ node }: { node: SystemHealthCameraNode }) => {
   const health = Math.max(0, Math.min(100, node.health));
   return (
-    <div className="bg-[#0f0f11] border border-zinc-800 rounded-xl p-5">
+    <Panel>
       <div className="flex justify-between items-start gap-4 mb-5">
         <div className="flex items-center gap-3 min-w-0">
           <div className="p-2 bg-zinc-900 rounded-lg text-zinc-300">
@@ -91,9 +92,9 @@ const CameraCard = ({ node }: { node: SystemHealthCameraNode }) => {
             <p className="text-[10px] text-zinc-600 font-mono truncate">{node.id} · {node.zone || 'Unassigned'}</p>
           </div>
         </div>
-        <span className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase ${statusTone(node.running ? 'online' : node.status)}`}>
+        <Badge tone={statusTone(node.running ? 'running' : node.status)}>
           {node.running ? 'running' : node.status}
-        </span>
+        </Badge>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -115,7 +116,7 @@ const CameraCard = ({ node }: { node: SystemHealthCameraNode }) => {
         <div className="h-full bg-vs-orange transition-all duration-700" style={{ width: `${health}%` }} />
       </div>
       <p className="mt-4 text-[10px] text-zinc-600 font-mono truncate">{node.lastError || node.sourceName || 'Ready for stream assignment'}</p>
-    </div>
+    </Panel>
   );
 };
 
@@ -151,16 +152,15 @@ const SystemHealth = () => {
   ] : []), [summary]);
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto bg-[#050505]">
-      <div className="flex justify-between items-start gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">{t('health')}</h2>
-          <p className="text-sm text-zinc-500">Live edge infrastructure, workers, cameras, and runtime telemetry.</p>
-        </div>
+    <PageShell
+      title={t('health')}
+      description="Live edge infrastructure, workers, cameras, and runtime telemetry."
+      actions={
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-[10px] font-mono uppercase text-zinc-500">
           {loading ? 'syncing' : `updated ${new Date((snapshot?.generatedAt ?? 0) * 1000).toLocaleTimeString()}`}
         </div>
-      </div>
+      }
+    >
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
@@ -177,7 +177,7 @@ const SystemHealth = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {serviceRows.map((service) => (
-          <div key={service.name} className="bg-[#0f0f11] border border-zinc-800 rounded-xl p-4 flex items-center justify-between gap-4">
+          <Panel key={service.name} className="p-4 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-zinc-900 text-vs-orange">
                 {service.name.includes('Database') ? <Database size={18} /> : service.name.includes('Redis') ? <Gauge size={18} /> : <ShieldCheck size={18} />}
@@ -187,8 +187,8 @@ const SystemHealth = () => {
                 <p className="text-[10px] font-mono text-zinc-600">{service.detail}</p>
               </div>
             </div>
-            <span className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase ${statusTone(service.status)}`}>{service.status}</span>
-          </div>
+            <Badge tone={statusTone(service.status)}>{service.status}</Badge>
+          </Panel>
         ))}
       </div>
 
@@ -214,7 +214,7 @@ const SystemHealth = () => {
           ))}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 };
 

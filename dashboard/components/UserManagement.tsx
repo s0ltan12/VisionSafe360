@@ -4,6 +4,7 @@ import { Plus, MoreVertical, Shield, User as UserIcon, X, CheckCircle2, Trash2, 
 import { User, UserRole } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { UsersAPI } from '../api';
+import { Button, FieldRoot, PageShell, Panel, SelectField, TextInput } from './ui';
 
 
 
@@ -105,19 +106,13 @@ const UserManagement = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-white">{t('users')}</h2>
-          <p className="text-sm text-zinc-500">Manage system access roles and account status.</p>
-        </div>
-        <button onClick={handleOpenAddModal} className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-vs-orange text-black rounded hover:bg-vs-lightOrange text-sm font-bold shadow-glow transition-colors">
-            <Plus size={18} />
-            <span>{t('addUser')}</span>
-        </button>
-      </div>
+    <PageShell
+      title={t('users')}
+      description="Manage system access roles and account status."
+      actions={<Button onClick={handleOpenAddModal} variant="primary" icon={<Plus size={18} />}>{t('addUser')}</Button>}
+    >
 
-      <div className="bg-[#0f0f11] border border-zinc-800 rounded-xl shadow-sm overflow-hidden">
+      <Panel padded={false} className="shadow-sm overflow-hidden">
         <table className="w-full text-start text-sm text-zinc-400">
           <thead className="bg-zinc-900/50 text-zinc-500 uppercase text-xs font-semibold border-b border-zinc-800">
             <tr>
@@ -191,7 +186,7 @@ const UserManagement = () => {
             )}
           </tbody>
         </table>
-      </div>
+      </Panel>
 
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -205,54 +200,51 @@ const UserManagement = () => {
               </button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">Full Name *</label>
-                <input 
+              <FieldRoot label="Full Name *">
+                <TextInput
                   type="text" 
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none" 
+                  className="bg-black"
                   placeholder="John Doe" 
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">Email Address *</label>
-                <input 
+              </FieldRoot>
+              <FieldRoot label="Email Address *">
+                <TextInput
                   type="email" 
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none" 
+                  className="bg-black"
                   placeholder="john@visionsafe.co" 
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">System Role</label>
-                <select 
+              </FieldRoot>
+              <FieldRoot label="System Role">
+                <SelectField
                   value={formRole}
                   onChange={(e) => setFormRole(e.target.value as UserRole)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                  className="bg-black"
                 >
                   <option value="Safety Engineer">Safety Engineer</option>
                   <option value="Data Analyst">Data Analyst</option>
                   <option value="Admin">Admin</option>
-                </select>
-              </div>
+                </SelectField>
+              </FieldRoot>
             </div>
             <div className="p-6 bg-zinc-900/30 flex justify-end space-x-3 rtl:space-x-reverse">
-              <button onClick={() => { setShowAddModal(false); resetForm(); }} className="px-4 py-2 text-zinc-500 hover:text-white font-medium uppercase text-xs tracking-widest">{t('cancel')}</button>
-              <button 
+              <Button onClick={() => { setShowAddModal(false); resetForm(); }} variant="ghost">{t('cancel')}</Button>
+              <Button
                 onClick={handleSaveUser}
                 disabled={!formName.trim() || !formEmail.trim()}
-                className="px-6 py-2 bg-vs-orange text-black font-bold rounded-lg shadow-glow hover:bg-vs-lightOrange transition-colors flex items-center space-x-2 rtl:space-x-reverse uppercase text-xs tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                variant="primary"
+                icon={<CheckCircle2 size={16} />}
               >
-                <CheckCircle2 size={16} />
-                <span>{editingUser ? t('saveChanges') : t('submit')}</span>
-              </button>
+                {editingUser ? t('saveChanges') : t('submit')}
+              </Button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 };
 

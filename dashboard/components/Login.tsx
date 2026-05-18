@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
-import { User, Lock, AlertCircle, ArrowRight } from 'lucide-react';
+import { User, Lock, ArrowRight } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import VisionSafeLogo from './VisionSafeLogo';
 import { UserRole } from '../types';
 import { AuthAPI, setAuthToken } from '../api';
-import { a11yClasses, AccessibleErrorMessage, AccessibleSpinner, ariaUtils, focusUtils, announceToScreenReader } from '../utils/accessibility';
+import { AccessibleErrorMessage, announceToScreenReader } from '../utils/accessibility';
+import { Button, FieldRoot, TextInput } from './ui';
 
 interface LoginProps {
    onLogin: (user: {name: string, role: UserRole}, token: string) => void;
@@ -103,109 +104,73 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               />
             )}
 
-            <div className="space-y-2">
-              <label htmlFor="username-input" className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                Username
-              </label>
-              <div className="relative">
-                <User className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" size={18} aria-hidden="true" />
-                <input 
-                  id="username-input"
-                  type="text" 
-                  required
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value);
-                    setUsernameError('');
-                  }}
-                  onBlur={() => {
-                    if (!username.trim()) {
-                      setUsernameError('Username is required');
-                    }
-                  }}
-                  className={`w-full bg-black border rounded-xl py-3 ps-10 pe-4 text-white focus:outline-none transition-all placeholder-zinc-800 text-sm ${a11yClasses.focusRing} ${
-                    usernameError ? 'border-red-500/50' : 'border-zinc-800 focus:border-vs-orange'
-                  }`}
-                  placeholder="e.g. admin or email"
-                  aria-invalid={!!usernameError}
-                  aria-describedby={usernameError ? 'username-error' : undefined}
-                />
-              </div>
-              {usernameError && (
-                <div 
-                  id="username-error" 
-                  role="alert" 
-                  className="text-red-500 text-xs mt-1 flex items-center space-x-1 rtl:space-x-reverse"
-                >
-                  <AlertCircle size={14} />
-                  <span>{usernameError}</span>
-                </div>
-              )}
-            </div>
+            <FieldRoot label="Username" htmlFor="username-input" error={usernameError} errorId="username-error">
+              <TextInput
+                id="username-input"
+                type="text"
+                required
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  setUsernameError('');
+                }}
+                onBlur={() => {
+                  if (!username.trim()) {
+                    setUsernameError('Username is required');
+                  }
+                }}
+                leadingIcon={<User size={18} />}
+                className="rounded-xl bg-black py-3 ps-10 pe-4 placeholder-zinc-800"
+                placeholder="e.g. admin or email"
+                error={!!usernameError}
+                aria-describedby={usernameError ? 'username-error' : undefined}
+              />
+            </FieldRoot>
 
-            <div className="space-y-2">
-              <label htmlFor="password-input" className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" size={18} aria-hidden="true" />
-                <input 
-                  id="password-input"
-                  type="password" 
-                  required
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setPasswordError('');
-                  }}
-                  onBlur={() => {
-                    if (!password.trim()) {
-                      setPasswordError('Password is required');
-                    }
-                  }}
-                  className={`w-full bg-black border rounded-xl py-3 ps-10 pe-4 text-white focus:outline-none transition-all placeholder-zinc-800 text-sm ${a11yClasses.focusRing} ${
-                    passwordError ? 'border-red-500/50' : 'border-zinc-800 focus:border-vs-orange'
-                  }`}
-                  placeholder="Demo password"
-                  aria-invalid={!!passwordError}
-                  aria-describedby={passwordError ? 'password-error' : 'password-help'}
-                />
-              </div>
-              {passwordError && (
-                <div 
-                  id="password-error" 
-                  role="alert" 
-                  className="text-red-500 text-xs mt-1 flex items-center space-x-1 rtl:space-x-reverse"
-                >
-                  <AlertCircle size={14} />
-                  <span>{passwordError}</span>
-                </div>
-              )}
-              <div id="password-help" className="text-xs text-zinc-600">
-                Emails: hisham@visionsafe.co / hisham123, soltan@visionsafe.co / soltan123, raneem@visionsafe.co / raneem123, john@visionsafe.co / john123, shams@visionsafe.co / shams123
-              </div>
-            </div>
+            <FieldRoot
+              label="Password"
+              htmlFor="password-input"
+              error={passwordError}
+              errorId="password-error"
+              helpId="password-help"
+              helpText="Emails: hisham@visionsafe.co / hisham123, soltan@visionsafe.co / soltan123, raneem@visionsafe.co / raneem123, john@visionsafe.co / john123, shams@visionsafe.co / shams123"
+            >
+              <TextInput
+                id="password-input"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setPasswordError('');
+                }}
+                onBlur={() => {
+                  if (!password.trim()) {
+                    setPasswordError('Password is required');
+                  }
+                }}
+                leadingIcon={<Lock size={18} />}
+                className="rounded-xl bg-black py-3 ps-10 pe-4 placeholder-zinc-800"
+                placeholder="Demo password"
+                error={!!passwordError}
+                aria-describedby={passwordError ? 'password-error' : 'password-help'}
+              />
+            </FieldRoot>
 
-            <button 
+            <Button
               ref={submitButtonRef}
               type="submit" 
               disabled={loading}
+              isLoading={loading}
+              variant="primary"
+              size="lg"
               aria-busy={loading}
               aria-label={loading ? 'Signing in, please wait' : 'Sign in to VisionSafe 360'}
-              className={`w-full bg-vs-orange hover:bg-vs-lightOrange text-black font-bold py-3.5 rounded-xl transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse group disabled:opacity-50 uppercase text-xs tracking-widest ${a11yClasses.focusRing}`}
+              trailingIcon={!loading ? <ArrowRight size={18} className="group-hover:translate-x-1 rtl:group-hover:-translate-x-1 transition-transform" /> : undefined}
+              className="group w-full"
             >
-              {loading ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                  <span>Signing In</span>
-                </>
-              ) : (
-                <>
-                  <span>Sign In</span>
-                  <ArrowRight size={18} className="group-hover:translate-x-1 rtl:group-hover:-translate-x-1 transition-transform" aria-hidden="true" />
-                </>
-              )}
-            </button>
+              {loading ? 'Signing In' : 'Sign In'}
+            </Button>
           </form>
           <div className="mt-8 pt-6 border-t border-zinc-800 text-center">
             <p className="text-[9px] text-zinc-600 uppercase tracking-widest font-mono">

@@ -9,7 +9,6 @@ import {
   CheckCircle,
   ArrowRight,
   Download,
-  Calendar,
   X,
   CheckCircle2,
   Trash2
@@ -17,25 +16,26 @@ import {
 import { Incident, Severity } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { IncidentsAPI } from '../api';
+import { Badge, Button, FieldRoot, PageShell, Panel, SelectField, TextAreaField, TextInput } from './ui';
 
 
 
 const SeverityBadge = ({ severity }: { severity: Severity }) => {
-  const styles = {
-    High: 'bg-red-500/10 text-red-500 border-red-500/20',
-    Medium: 'bg-vs-orange/10 text-vs-orange border-vs-orange/20',
-    Low: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
-  };
+  const tones = {
+    High: 'danger',
+    Medium: 'orange',
+    Low: 'warning',
+  } as const;
   const { t } = useLanguage();
   return (
-    <span className={`px-2 py-0.5 rounded border text-[10px] uppercase font-bold tracking-wider ${styles[severity]}`}>
+    <Badge tone={tones[severity]}>
       {t(severity.toLowerCase() as any)}
-    </span>
+    </Badge>
   );
 };
 
 const StatCard = ({ label, value, icon: Icon, colorClass }: { label: string, value: string, icon: any, colorClass: string }) => (
-    <div className="bg-[#0f0f11] p-4 rounded-lg border border-zinc-800 flex items-center space-x-4 rtl:space-x-reverse">
+    <Panel className="p-4 flex items-center space-x-4 rtl:space-x-reverse">
         <div className={`p-2 rounded bg-zinc-900 border border-zinc-800 ${colorClass}`}>
             <Icon size={20} />
         </div>
@@ -43,11 +43,11 @@ const StatCard = ({ label, value, icon: Icon, colorClass }: { label: string, val
             <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider">{label}</p>
             <p className="text-xl font-bold text-white">{value}</p>
         </div>
-    </div>
+    </Panel>
 );
 
 const Incidents = () => {
-  const { t, dir } = useLanguage();
+  const { t } = useLanguage();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -151,24 +151,16 @@ const Incidents = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto bg-[#050505]">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">{t('incidents')}</h2>
-          <p className="text-zinc-500 text-sm">Review and manage reported workplace incidents.</p>
-        </div>
-        <div className="flex space-x-3 rtl:space-x-reverse">
-           <button onClick={handleExport} className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded hover:bg-zinc-800 text-sm font-medium transition-colors">
-              <Download size={16} />
-              <span>{t('exportCSV')}</span>
-           </button>
-           <button onClick={() => setShowAddModal(true)} className="flex items-center space-x-2 rtl:space-x-reverse px-4 py-2 bg-vs-orange text-black rounded hover:bg-vs-lightOrange text-sm font-bold shadow-glow transition-colors">
-              <Plus size={16} />
-              <span>{t('reportIncident')}</span>
-           </button>
-        </div>
-      </div>
+    <PageShell
+      title={t('incidents')}
+      description="Review and manage reported workplace incidents."
+      actions={
+        <>
+          <Button onClick={handleExport} icon={<Download size={16} />}>{t('exportCSV')}</Button>
+          <Button onClick={() => setShowAddModal(true)} variant="primary" icon={<Plus size={16} />}>{t('reportIncident')}</Button>
+        </>
+      }
+    >
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -179,7 +171,7 @@ const Incidents = () => {
       </div>
 
       {/* Filter Bar */}
-      <div className="flex flex-col lg:flex-row gap-4 bg-[#0f0f11] p-4 rounded-lg border border-zinc-800 items-center">
+      <Panel className="p-4 flex flex-col lg:flex-row gap-4 items-center">
          <div className="relative flex-1 w-full lg:w-auto">
            <Search className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" size={16} />
            <input 
@@ -196,21 +188,21 @@ const Incidents = () => {
           )}
          </div>
          <div className="flex gap-2 w-full lg:w-auto overflow-x-auto pb-2 lg:pb-0">
-            <select 
+            <SelectField
               value={zoneFilter}
               onChange={(e) => setZoneFilter(e.target.value)}
-              className="bg-[#050505] border border-zinc-800 text-zinc-400 text-sm rounded px-3 py-2 focus:outline-none focus:border-vs-orange"
+              className="py-2"
             >
                <option value="all">{t('allZones')}</option>
                {uniqueZones.map(zone => (
                  <option key={zone} value={zone}>{zone}</option>
                ))}
-            </select>
+            </SelectField>
          </div>
-      </div>
+      </Panel>
 
       {/* Incidents Table */}
-      <div className="bg-[#0f0f11] border border-zinc-800 rounded-lg shadow-sm overflow-hidden">
+      <Panel padded={false} className="rounded-lg shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-start text-sm text-zinc-400">
             <thead className="bg-zinc-900/50 text-zinc-500 uppercase text-[10px] font-bold tracking-wider border-b border-zinc-800">
@@ -243,7 +235,7 @@ const Incidents = () => {
                   <td className="px-6 py-4 text-zinc-300">{incident.zone}</td>
                   <td className="px-6 py-4"><SeverityBadge severity={incident.severity} /></td>
                   <td className="px-6 py-4">
-                     <span className="bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-300 border border-zinc-700">{incident.classification}</span>
+                     <Badge>{incident.classification}</Badge>
                   </td>
                   <td className="px-6 py-4 text-end">
                     <div className="flex items-center justify-end space-x-1 rtl:space-x-reverse">
@@ -265,7 +257,7 @@ const Incidents = () => {
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
 
       {/* Add Incident Modal */}
       {showAddModal && (
@@ -279,93 +271,87 @@ const Incidents = () => {
             </div>
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-zinc-500 uppercase">{t('category')}</label>
-                  <select 
+                <FieldRoot label={t('category')}>
+                  <SelectField
                     value={formCategory} 
                     onChange={(e) => setFormCategory(e.target.value)}
-                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    className="bg-black"
                   >
                     <option>Near Miss</option>
                     <option>Minor Injury</option>
                     <option>Critical Failure</option>
                     <option>Property Damage</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-zinc-500 uppercase">{t('severity')}</label>
-                  <select 
+                  </SelectField>
+                </FieldRoot>
+                <FieldRoot label={t('severity')}>
+                  <SelectField
                     value={formSeverity} 
                     onChange={(e) => setFormSeverity(e.target.value as Severity)}
-                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    className="bg-black"
                   >
                     <option value="High">{t('high')}</option>
                     <option value="Medium">{t('medium')}</option>
                     <option value="Low">{t('low')}</option>
-                  </select>
-                </div>
+                  </SelectField>
+                </FieldRoot>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">{t('location')}</label>
-                <select
+              <FieldRoot label={t('location')}>
+                <SelectField
                   value={formZone}
                   onChange={(e) => setFormZone(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                  className="bg-black"
                 >
                   <option>Zone A - Welding</option>
                   <option>Zone B - Forklift</option>
                   <option>Zone C - Loading</option>
                   <option>Zone D - Assembly</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">{t('description')} *</label>
-                <textarea 
+                </SelectField>
+              </FieldRoot>
+              <FieldRoot label={`${t('description')} *`}>
+                <TextAreaField
                   rows={2} 
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none resize-none" 
+                  className="bg-black"
                   placeholder="Describe what happened..."
-                ></textarea>
-              </div>
+                />
+              </FieldRoot>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-zinc-500 uppercase">Root Cause</label>
-                  <input 
+                <FieldRoot label="Root Cause">
+                  <TextInput
                     type="text"
                     value={formRootCause}
                     onChange={(e) => setFormRootCause(e.target.value)}
-                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    className="bg-black"
                     placeholder="e.g. Procedural Error"
                   />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-zinc-500 uppercase">Corrective Action</label>
-                  <input 
+                </FieldRoot>
+                <FieldRoot label="Corrective Action">
+                  <TextInput
                     type="text"
                     value={formCorrectiveAction}
                     onChange={(e) => setFormCorrectiveAction(e.target.value)}
-                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
+                    className="bg-black"
                     placeholder="e.g. Additional Training"
                   />
-                </div>
+                </FieldRoot>
               </div>
             </div>
             <div className="p-6 bg-zinc-900/30 flex justify-end space-x-3 rtl:space-x-reverse">
-              <button onClick={() => setShowAddModal(false)} className="px-4 py-2 text-zinc-500 hover:text-white font-medium uppercase text-xs tracking-widest">{t('cancel')}</button>
-              <button 
+              <Button onClick={() => setShowAddModal(false)} variant="ghost">{t('cancel')}</Button>
+              <Button
                 onClick={handleAddIncident}
                 disabled={!formDescription.trim()}
-                className="px-6 py-2 bg-vs-orange text-black font-bold rounded-lg shadow-glow hover:bg-vs-lightOrange transition-colors flex items-center space-x-2 rtl:space-x-reverse uppercase text-xs tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                variant="primary"
+                icon={<CheckCircle2 size={16} />}
               >
-                <CheckCircle2 size={16} />
-                <span>{t('submit')}</span>
-              </button>
+                {t('submit')}
+              </Button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 };
 
