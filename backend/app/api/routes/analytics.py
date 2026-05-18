@@ -30,9 +30,29 @@ def incidents_time_series(
     return AnalyticsService.get_incidents_time_series(db, days=days, severity=severity, zone=zone)
 
 
+@router.get("/analytics/incidents/time-series")
+def analytics_incidents_time_series(
+    days: int = Query(30, ge=1, le=365, description="Look-back window in days"),
+    severity: Optional[str] = Query(None, description="Filter by severity"),
+    zone: Optional[str] = Query(None, description="Filter by zone"),
+    db: Session = Depends(get_db),
+):
+    return AnalyticsService.get_incidents_time_series(db, days=days, severity=severity, zone=zone)
+
+
 @router.get("/alerts/by-severity")
 def alerts_by_severity(db: Session = Depends(get_db)):
     return AnalyticsService.get_alerts_by_severity(db)
+
+
+@router.get("/alerts/by-type")
+def alerts_by_type(db: Session = Depends(get_db)):
+    return AnalyticsService.get_alerts_by_type(db)
+
+
+@router.get("/analytics/alerts/by-type")
+def analytics_alerts_by_type(db: Session = Depends(get_db)):
+    return AnalyticsService.get_alerts_by_type(db)
 
 
 @router.get("/alerts/by-zone")

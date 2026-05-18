@@ -54,7 +54,12 @@ class ProximityAnalyzer:
 
     @staticmethod
     def _assign_track_id(person_bbox: Tuple[int, int, int, int], tracked_people: List[Detection]) -> Optional[int]:
-        """Match untracked person bbox to nearest tracked pose person by IoU."""
+        """Match untracked person bbox to a tracked pose person by IoU or distance.
+
+        Returns None when no plausible match is found; callers should treat that
+        as an unattributed hazard rather than guessing a worker.
+        """
+        # 1. Try matching with normal IoU
         best_tid = None
         best_iou = 0.2
         for p in tracked_people:
@@ -64,7 +69,41 @@ class ProximityAnalyzer:
             if iou > best_iou:
                 best_iou = iou
                 best_tid = p.track_id
-        return best_tid
+        if best_tid is not None:
+            return best_tid
+
+        # 2. Try matching with very low IoU (generous)
+        best_iou = 0.02
+        for p in tracked_people:
+            if p.track_id is None:
+                continue
+            iou = _iou(person_bbox, p.bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_tid = p.track_id
+        if best_tid is not None:
+            return best_tid
+
+        # 3. Try matching with center distance (within 250 pixels)
+        min_dist = 250.0
+        px, py = _center(person_bbox)
+        for p in tracked_people:
+            if p.track_id is None:
+                continue
+            tx, ty = _center(p.bbox)
+            dist = math.hypot(px - tx, py - ty)
+            if dist < min_dist:
+                min_dist = dist
+                best_tid = p.track_id
+        if best_tid is not None:
+            return best_tid
+
+        # 4. If exactly one tracked person exists in the frame, assign their track ID
+        valid_tracks = [p.track_id for p in tracked_people if p.track_id is not None]
+        if len(valid_tracks) == 1:
+            return valid_tracks[0]
+
+        return None
 
     def analyze(
         self,

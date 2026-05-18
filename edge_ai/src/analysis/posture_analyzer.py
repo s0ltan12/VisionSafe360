@@ -94,6 +94,7 @@ class PostureAnalyzer:
 
     def __init__(self) -> None:
         self._states: Dict[int, PersonPostureState] = {}
+        self.last_samples: List[HazardEvent] = []
         logger.info("PostureAnalyzer initialized (full RULA/REBA)")
 
     def analyze(
@@ -109,6 +110,7 @@ class PostureAnalyzer:
             pose_results: Ultralytics Results object with .keypoints attribute.
         """
         events: List[HazardEvent] = []
+        self.last_samples = []
 
         if pose_results is None:
             return events
@@ -194,6 +196,29 @@ class PostureAnalyzer:
 
             is_risky = (rula_score >= RULA_ALERT_THRESHOLD
                         or reba_score >= REBA_ALERT_THRESHOLD)
+            sample_severity = (
+                Severity.HIGH
+                if rula_score >= 7 or reba_score >= 11
+                else Severity.MEDIUM
+                if is_risky
+                else Severity.LOW
+            )
+            self.last_samples.append(HazardEvent(
+                event_type="ergonomic_sample",
+                severity=sample_severity,
+                camera_id=camera_id,
+                timestamp=timestamp,
+                frame_number=frame_number,
+                track_id=tid,
+                description=f"Ergonomic score sample RULA={rula_score} REBA={reba_score} track={tid}",
+                metadata={
+                    "record_only": True,
+                    "rula_score": rula_score,
+                    "reba_score": reba_score,
+                    "rula_risk": rula_result["risk_level"],
+                    "reba_risk": reba_result["risk_level"],
+                },
+            ))
 
             # ── Event emission ──────────────────────────────────────
             # Immediate critical (RULA 7 = highest risk)

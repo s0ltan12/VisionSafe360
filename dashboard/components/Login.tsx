@@ -39,10 +39,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   const resolveCredentials = (value: string) => {
-    const lower = value.toLowerCase().trim();
-    if (lower === 'admin') return { email: 'alex.m@visionsafe.co' };
-    if (lower === 'safety') return { email: 'sarah.c@visionsafe.co' };
-    if (lower === 'analyst') return { email: 'analyst@visionsafe.co' };
+    // Require full email address; no shortcuts.
     return { email: value.trim() };
   };
 
@@ -185,7 +182,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 </div>
               )}
               <div id="password-help" className="text-xs text-zinc-600">
-                Demo accounts: admin / Admin123, safety / Safety123, analyst / Analyst123
+                Emails: hisham@visionsafe.co / hisham123, soltan@visionsafe.co / soltan123, raneem@visionsafe.co / raneem123, john@visionsafe.co / john123, shams@visionsafe.co / shams123
               </div>
             </div>
 

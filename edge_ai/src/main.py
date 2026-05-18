@@ -67,6 +67,7 @@ from src.streaming.stream_handler import StreamHandler
 from src.analysis.hazard_analyzer import HazardAnalyzer
 from src.analysis.posture_analyzer import PostureAnalyzer
 from src.analysis.proximity_analyzer import ProximityAnalyzer
+from src.analysis.ppe_analyzer import PPEAnalyzer
 from src.analysis.event_aggregator import EventAggregator
 from src.analysis.calibration import CalibrationManager
 from src.analysis.track_quality import TrackQualityMonitor
@@ -262,6 +263,7 @@ class PipelineContext:
     hazard_analyzer: Optional[HazardAnalyzer]
     posture_analyzer: Optional[PostureAnalyzer]
     proximity_analyzer: Optional[ProximityAnalyzer]
+    ppe_analyzer: Optional[PPEAnalyzer]
     ppe_enabled: bool
     person_tracker_source: str
 
@@ -407,6 +409,18 @@ class FrameProcessor:
                 )
             )
 
+        if ctx.ppe_analyzer is not None and ppe_detections:
+            tracked_people = [d for d in detections if d.class_name == "person"]
+            hazard_events.extend(
+                ctx.ppe_analyzer.analyze(
+                    ppe_detections=ppe_detections,
+                    tracked_people=tracked_people,
+                    camera_id=ctx.stream.camera_id,
+                    frame_number=bundle.frame_number,
+                    timestamp=ts_now,
+                )
+            )
+
         if (
             ctx.posture_analyzer is not None
             and pose_results is not None
@@ -420,6 +434,15 @@ class FrameProcessor:
                     timestamp=ts_now,
                 )
             )
+            if BACKEND_EVENTS_ENABLED:
+                for sample in getattr(ctx.posture_analyzer, "last_samples", []):
+                    if not getattr(sample, "camera_name", None) and ctx.camera_name:
+                        sample.camera_name = ctx.camera_name
+                    if not getattr(sample, "worker_id", None) and ctx.worker_id:
+                        sample.worker_id = ctx.worker_id
+                    if not getattr(sample, "worker_gpu_id", None) and ctx.worker_gpu_id:
+                        sample.worker_gpu_id = ctx.worker_gpu_id
+                    ctx.backend_client.submit_ergonomic_sample_fast(sample)
 
         emitted_events = ctx.event_aggregator.process(hazard_events, ts_now)
         for event in emitted_events:
@@ -441,8 +464,29 @@ class FrameProcessor:
             "n_siren_triggers": 0,
             "offline_queue_size": ctx.backend_client.offline_queue_size(),
         }
+
+        annotated = bundle.frame.copy()
+        ctx.renderer.render(
+            annotated,
+            detections=render_detections,
+            pose_results=pose_results,
+            hazard_events=emitted_events,
+            display_id_map=display_id_map,
+            calibrated=ctx.is_calibrated,
+            fps=ctx.inference_fps,
+            latency_ms=det_latency + prox_latency + ppe_latency + pose_latency,
+            n_det=len(detections),
+            n_tracked=n_tracked,
+            vram_mb=ctx.engine.vram_used_mb(),
+            n_hazards=len(emitted_events),
+            pose_ms=0.0,
+            track_coverage=track_metrics.get("track_coverage", 0.0),
+            ppe_capable=ctx.ppe_capable,
+            now=ts_now,
+        )
+
         if ALERTS_ENABLED:
-            delivery_metrics = ctx.alert_manager.process_events(emitted_events)
+            delivery_metrics = ctx.alert_manager.process_events(emitted_events, frame=annotated)
 
         if (
             BACKEND_EVENTS_ENABLED
@@ -540,26 +584,6 @@ class FrameProcessor:
                     )
                 )
 
-        annotated = bundle.frame.copy()
-        ctx.renderer.render(
-            annotated,
-            detections=render_detections,
-            pose_results=pose_results,
-            hazard_events=emitted_events,
-            display_id_map=display_id_map,
-            calibrated=ctx.is_calibrated,
-            fps=ctx.inference_fps,
-            latency_ms=det_latency + prox_latency + ppe_latency + pose_latency,
-            n_det=len(detections),
-            n_tracked=n_tracked,
-            vram_mb=ctx.engine.vram_used_mb(),
-            n_hazards=len(emitted_events),
-            pose_ms=0.0,
-            track_coverage=track_metrics.get("track_coverage", 0.0),
-            ppe_capable=ctx.ppe_capable,
-            now=ts_now,
-        )
-
         # Publish annotated frame to Redis for dashboard streaming
         if ctx.frame_publisher is not None:
             ctx.frame_publisher.publish(annotated)
@@ -616,6 +640,7 @@ def _build_pipeline_context(
 
     posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
     proximity_analyzer = ProximityAnalyzer() if proximity_enabled else None
+    ppe_analyzer = PPEAnalyzer() if ppe_enabled else None
 
     backend_client = BackendClient()
     fcm_service = FCMService()
@@ -675,6 +700,7 @@ def _build_pipeline_context(
         hazard_analyzer=hazard_analyzer,
         posture_analyzer=posture_analyzer,
         proximity_analyzer=proximity_analyzer,
+        ppe_analyzer=ppe_analyzer,
         ppe_enabled=ppe_enabled,
         person_tracker_source=person_tracker_source,
         backend_client=backend_client,
@@ -892,7 +918,6 @@ class CameraContext:
     """Per-camera state for multi-camera pipeline."""
     cam_id: str
     stream: StreamHandler
-    metrics: MetricsLogger
     event_aggregator: EventAggregator
     track_monitor: TrackQualityMonitor
     det_smoother: _DetectionSmoother
@@ -900,6 +925,7 @@ class CameraContext:
     hazard_analyzer: Optional[HazardAnalyzer]
     posture_analyzer: Optional[PostureAnalyzer]
     proximity_analyzer: Optional[ProximityAnalyzer]
+    ppe_analyzer: Optional[PPEAnalyzer]
     renderer: SafetyOverlayRenderer
     is_calibrated: bool
     win_name: str
@@ -935,6 +961,7 @@ def _build_camera_context(
     
     posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
     proximity_analyzer = ProximityAnalyzer() if profile.is_enabled("proximity_analyzer") else None
+    ppe_analyzer = PPEAnalyzer() if profile.is_enabled("ppe_analyzer") else None
     
     win_name = f"VisionSafe360 - {cam_id}"
     out_path = OUTPUT_DIR / f"{cam_id}_output.mp4" if not show else None
@@ -942,7 +969,6 @@ def _build_camera_context(
     return CameraContext(
         cam_id=cam_id,
         stream=stream,
-        metrics=MetricsLogger(),
         event_aggregator=EventAggregator(),
         track_monitor=TrackQualityMonitor(),
         det_smoother=_DetectionSmoother(grace_frames=TRACK_ID_GRACE_FRAMES),
@@ -950,6 +976,7 @@ def _build_camera_context(
         hazard_analyzer=hazard_analyzer,
         posture_analyzer=posture_analyzer,
         proximity_analyzer=proximity_analyzer,
+        ppe_analyzer=ppe_analyzer,
         renderer=renderer,
         is_calibrated=is_calibrated,
         win_name=win_name,
@@ -1025,7 +1052,7 @@ def run_multi_camera_pipeline(
     # ── Scheduling ──────────────────────────────────────────────────
     fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
     ergo_every_n = profile.get_schedule("posture_analyzer")
-    proximity_every_n = profile.get_sub_schedule("hazard_analyzer", "proximity")
+    proximity_every_n = profile.get_schedule("proximity_analyzer")
     ppe_every_n = profile.get_schedule("ppe_analyzer")
     
     infer_interval = 1.0 / TARGET_INFER_FPS
@@ -1079,11 +1106,13 @@ def run_multi_camera_pipeline(
                     raise
                 
                 # ── Proximity detection ─────────────────────────────
+                raw_prox_detections: list = []
                 prox_detections = []
                 prox_latency = 0.0
-                if proximity_enabled and cam.frame_counter % proximity_every_n == 0:
-                    prox_detections, prox_latency = engine.run_proximity(bundle)
-                    prox_detections, _ = cam.forklift_smoother.smooth(prox_detections)
+                if proximity_enabled:
+                    if cam.frame_counter % proximity_every_n == 0:
+                        raw_prox_detections, prox_latency = engine.run_proximity(bundle)
+                    prox_detections, _ = cam.forklift_smoother.smooth(raw_prox_detections)
                     detections.extend([d for d in prox_detections if d.class_name == "forklift"])
                 
                 # ── PPE detection ───────────────────────────────────
@@ -1123,6 +1152,15 @@ def run_multi_camera_pipeline(
                         frame_number=cam.frame_counter,
                         timestamp=ts_now,
                     ))
+                    if BACKEND_EVENTS_ENABLED:
+                        for sample in getattr(cam.posture_analyzer, "last_samples", []):
+                            if not getattr(sample, "camera_name", None) and BACKEND_CAMERA_NAME:
+                                sample.camera_name = BACKEND_CAMERA_NAME
+                            if not getattr(sample, "worker_id", None) and BACKEND_WORKER_ID:
+                                sample.worker_id = BACKEND_WORKER_ID
+                            if not getattr(sample, "worker_gpu_id", None) and BACKEND_WORKER_GPU_ID:
+                                sample.worker_gpu_id = BACKEND_WORKER_GPU_ID
+                            backend_client.submit_ergonomic_sample_fast(sample)
                 
                 # ── Proximity analysis ──────────────────────────────
                 if cam.proximity_analyzer is not None and prox_detections:
@@ -1135,11 +1173,26 @@ def run_multi_camera_pipeline(
                         frame_number=cam.frame_counter,
                         timestamp=ts_now,
                     ))
+
+                # ── PPE compliance analysis ────────────────────────
+                if cam.ppe_analyzer is not None and ppe_detections:
+                    hazard_events.extend(cam.ppe_analyzer.analyze(
+                        ppe_detections=ppe_detections,
+                        tracked_people=[d for d in detections if d.class_name == "person"],
+                        camera_id=cam.cam_id,
+                        frame_number=cam.frame_counter,
+                        timestamp=ts_now,
+                    ))
                 
-                # ── Event aggregation & alerting ────────────────────
+                # ── Event aggregation ───────────────────────────────
                 emitted_events = cam.event_aggregator.process(hazard_events, ts_now)
-                if emitted_events and ALERTS_ENABLED:
-                    alert_manager.process_events(emitted_events)
+                for event in emitted_events:
+                    if not getattr(event, "camera_name", None) and BACKEND_CAMERA_NAME:
+                        event.camera_name = BACKEND_CAMERA_NAME
+                    if not getattr(event, "worker_id", None) and BACKEND_WORKER_ID:
+                        event.worker_id = BACKEND_WORKER_ID
+                    if not getattr(event, "worker_gpu_id", None) and BACKEND_WORKER_GPU_ID:
+                        event.worker_gpu_id = BACKEND_WORKER_GPU_ID
                 
                 # ── Rendering ───────────────────────────────────────
                 cam.frames_processed += 1
@@ -1167,6 +1220,10 @@ def run_multi_camera_pipeline(
                     ppe_capable=ppe_capable,
                     now=ts_now,
                 )
+
+                # ── Alerting ────────────────────────────────────────
+                if emitted_events and ALERTS_ENABLED:
+                    alert_manager.process_events(emitted_events, frame=annotated)
                 
                 # ── Display / Write ─────────────────────────────────
                 if show:
@@ -1214,20 +1271,42 @@ def run_multi_camera_pipeline(
         logger.info("KeyboardInterrupt — shutting down")
     finally:
         # ── Cleanup ─────────────────────────────────────────────────
+        try:
+            alert_manager.shutdown(timeout_sec=2.0)
+        except Exception:
+            pass
         for cam in cameras:
             cam.stream.stop()
             if cam.writer is not None:
                 cam.writer.release()
-        
+
         if show:
             cv2.destroyAllWindows()
-        
-        siren_controller.stop()
-        backend_client.flush_offline_queue(limit=OFFLINE_SHUTDOWN_FLUSH_LIMIT)
-        
+
+        try:
+            siren_controller.stop()
+        except Exception:
+            pass
+        try:
+            backend_client.flush_offline_queue(limit=OFFLINE_SHUTDOWN_FLUSH_LIMIT)
+        except Exception:
+            pass
+
         logger.info("═══ Multi-Camera Pipeline Finished ═══")
         for cam in cameras:
-            logger.info("  %s: processed=%d frames", cam.cam_id, cam.frames_processed)
+            drop_pct = (
+                cam.stream.dropped_count / cam.stream.total_frames_read * 100
+                if cam.stream.total_frames_read > 0 else 0.0
+            )
+            logger.info(
+                "  %s: processed=%d  read=%d  dropped=%d (%.1f%%)  reconnects=%d",
+                cam.cam_id,
+                cam.frames_processed,
+                cam.stream.total_frames_read,
+                cam.stream.dropped_count,
+                drop_pct,
+                cam.stream.reconnect_count,
+            )
 
 
 def main() -> None:

@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ...config.database import get_db
 from ...config.settings import settings
-from ...schemas import AlertCreate, AlertOut, AlertUpdate, PaginatedResponse
+from ...models import User
+from ...schemas import AlertCreate, AlertEventOut, AlertOut, AlertUpdate, PaginatedResponse
 from ...services.alert_service import AlertService
 from ...utils.permissions import require_roles
+from ...utils.security import get_current_user
 
 router = APIRouter(
     prefix="/alerts",
@@ -47,6 +49,14 @@ def get_all_alerts(db: Session = Depends(get_db)):
     return items
 
 
+@router.get("/{alert_id}/events", response_model=List[AlertEventOut])
+def get_alert_events(alert_id: str, db: Session = Depends(get_db)):
+    alert = AlertService.get(db, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return AlertService.list_events(db, alert_id)
+
+
 @router.get("/{alert_id}", response_model=AlertOut)
 def get_alert(alert_id: str, db: Session = Depends(get_db)):
     alert = AlertService.get(db, alert_id)
@@ -61,8 +71,13 @@ def create_alert(payload: AlertCreate, db: Session = Depends(get_db)):
 
 
 @router.patch("/{alert_id}", response_model=AlertOut)
-def update_alert(alert_id: str, payload: AlertUpdate, db: Session = Depends(get_db)):
-    updated = AlertService.update(db, alert_id, payload)
+def update_alert(
+    alert_id: str,
+    payload: AlertUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    updated = AlertService.update(db, alert_id, payload, actor=current_user)
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found")
     return updated

@@ -49,7 +49,7 @@ class UISettings:
     hazard_fill_medium:   bool  = False   # border-only for MEDIUM (less noisy)
 
     # ── Banner layer ──────────────────────────────────────────────────
-    banner_critical_sec: float = 2.5     # total banner visible duration (s)
+    banner_critical_sec: float = 3.0     # total banner visible duration (s)
     banner_fade_sec:     float = 0.6     # fade-out duration within that window
     banner_max:           int  = 1       # max simultaneous banners (less intrusive)
     banner_enter_sec:    float = 0.40    # entrance motion duration (s)

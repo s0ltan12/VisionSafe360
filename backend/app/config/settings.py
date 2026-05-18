@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     # ── App ───────────────────────────────────────────────────────────
     APP_ENV: str = "development"
     DEBUG: bool = False
+    SEED_DATA: bool = True
 
     # ── Pagination defaults ───────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50

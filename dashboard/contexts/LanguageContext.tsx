@@ -43,10 +43,14 @@ const translations = {
     // Ergonomics
     ergonomicExposure: "Postural Risk Exposure",
     rulaScore: "Avg RULA Score",
+    rebaScore: "Avg REBA Score",
     riskyDuration: "Risky Posture Duration",
     badPostures: "Bad Postures Detected",
     ergoTrends: "Ergonomic Trends",
     riskByZone: "Risk Distribution by Zone",
+    noErgonomicData: "No ergonomic records available yet.",
+    runPostureAnalysis: "Run posture analysis from the edge pipeline to populate this view with live backend data.",
+    records: "Records",
 
     // Health
     edgeNodes: "Edge Computing Nodes",
@@ -213,10 +217,14 @@ const translations = {
     // Ergonomics
     ergonomicExposure: "التعرض لمخاطر الوضعيات",
     rulaScore: "متوسط مؤشر RULA",
+    rebaScore: "متوسط مؤشر REBA",
     riskyDuration: "مدة الوضعيات الخطرة",
     badPostures: "وضعيات خاطئة مكتشفة",
     ergoTrends: "اتجاهات الهندسة البشرية",
     riskByZone: "توزيع المخاطر حسب المنطقة",
+    noErgonomicData: "لا توجد سجلات هندسة بشرية متاحة بعد.",
+    runPostureAnalysis: "شغّل تحليل الوضعيات من خط الحافة لملء هذه الصفحة ببيانات مباشرة من الخلفية.",
+    records: "سجلات",
 
     // Health
     edgeNodes: "عقد حوسبة الحافة",

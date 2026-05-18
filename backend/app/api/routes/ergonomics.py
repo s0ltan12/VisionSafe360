@@ -1,7 +1,7 @@
 """Ergonomics API routes (was previously an empty file)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from ...config.database import get_db
@@ -30,9 +30,12 @@ def list_ergonomic_records(
 
 
 @router.get("/stats")
-def get_ergonomic_stats(db: Session = Depends(get_db)):
+def get_ergonomic_stats(
+    days: int = Query(7, ge=1, le=90, description="Trend window in days"),
+    db: Session = Depends(get_db),
+):
     """Summary statistics for the Ergonomics dashboard page."""
-    return ErgonomicService.get_stats(db)
+    return ErgonomicService.get_stats(db, days=days)
 
 
 @router.post("", response_model=ErgonomicRecordOut, status_code=201)

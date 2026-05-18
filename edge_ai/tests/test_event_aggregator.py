@@ -77,6 +77,19 @@ class TestPersistence:
         assert len(emitted) == 1
         assert emitted[0].event_type == "posture_risk"
 
+    def test_ppe_missing_requires_three_seconds(self):
+        """PPE missing alerts require continuous detection before emission."""
+        agg = EventAggregator()
+        t0 = 100.0
+        event_type = "ppe_missing_helmet"
+
+        assert agg.process([_event(event_type=event_type, timestamp=t0)], t0) == []
+        assert agg.process([_event(event_type=event_type, timestamp=t0 + 2.9)], t0 + 2.9) == []
+
+        emitted = agg.process([_event(event_type=event_type, timestamp=t0 + 3.0)], t0 + 3.0)
+        assert len(emitted) == 1
+        assert emitted[0].event_type == event_type
+
 
 # ════════════════════════════════════════════════════════════════════
 #  Deduplication / Cooldown Tests
@@ -164,3 +177,13 @@ class TestCooldownKeys:
         emitted = agg.process([ev1, ev2], t0)
         # Two different track_ids → two distinct keys → both emit
         assert len(emitted) == 2
+
+    def test_default_hazard_cooldown_is_fifty_seconds(self):
+        """Non-fall hazards are suppressed for the configured 50 second cooldown."""
+        agg = EventAggregator()
+        t0 = 100.0
+        event_type = "forklift_proximity_danger"
+
+        assert len(agg.process([_event(event_type=event_type, timestamp=t0)], t0)) == 1
+        assert agg.process([_event(event_type=event_type, timestamp=t0 + 49.0)], t0 + 49.0) == []
+        assert len(agg.process([_event(event_type=event_type, timestamp=t0 + 50.1)], t0 + 50.1)) == 1
