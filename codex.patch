@@ -1,8 +1,0 @@
-@@ -58,6 +58,7 @@
- }) => {
- 	return (
- 		<button
-+		aria-label={`Play video: ${video.name} - ${video.zone}`}
- 			onClick={onClick}
- 			className={`group relative overflow-hidden rounded-xl border text-start transition-all ${isActive ? 'border-vs-orange shadow-[0_0_0_1px_rgba(249,115,22,0.45)]' : 'border-zinc-800 hover:border-zinc-700'}`}
- 		>
