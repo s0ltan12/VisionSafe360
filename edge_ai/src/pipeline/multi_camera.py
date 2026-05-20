@@ -1,18 +1,19 @@
 """Multi-camera parallel pipeline with shared GPU models.
 
-Extracted from main.py — preserves original logic unchanged.
+Reuses PipelineContext + FrameProcessor to eliminate duplicated
+inference/analysis/rendering logic. Each camera gets its own
+PipelineContext but all share ONE InferenceEngine (one GPU).
 """
 from __future__ import annotations
 
 import logging
 import signal
 import time
-from typing import Any, Optional
+from typing import Optional
 
 import cv2
 
 from ..config.settings import (
-    ALERTS_ENABLED,
     BACKEND_CAMERA_NAME,
     BACKEND_EVENTS_ENABLED,
     BACKEND_WORKER_GPU_ID,
@@ -39,23 +40,36 @@ from ..alerts.alert_manager import AlertManager
 from ..alerts.fcm_service import FCMService
 from ..alerts.siren_controller import SirenController
 from ..integration.backend_client import BackendClient
+from ..utils.logger import MetricsLogger
 from ..ui.renderer import SafetyOverlayRenderer
 from ..config.ui_settings import load_ui_settings_from_profile
 from ..smoothing.detection_smoother import DetectionSmoother, ForkliftHoldSmoother
-from .context import CameraContext
+from .context import PipelineContext
+from .frame_processor import FrameProcessor
 
 logger = logging.getLogger("PipelineOrchestrator")
 
 
-def _build_camera_context(
+def _build_multi_camera_context(
     source: str | int,
     cam_id: str,
     show: bool,
     profile: ProfileConfig,
-    calibration_mgr: CalibrationManager
-) -> CameraContext:
-    """Build per-camera context (no GPU resources - those are shared)."""
+    calibration_mgr: CalibrationManager,
+    engine: InferenceEngine,
+    backend_client: BackendClient,
+    alert_manager: AlertManager,
+    siren_controller: SirenController,
+    ppe_enabled: bool,
+    ppe_capable: bool,
+    proximity_enabled: bool,
+) -> PipelineContext:
+    """Build a PipelineContext for one camera, sharing GPU and backend resources."""
     stream = StreamHandler(source=source, camera_id=cam_id)
+    metrics = MetricsLogger()
+
+    det_smoother = DetectionSmoother(grace_frames=TRACK_ID_GRACE_FRAMES)
+    forklift_smoother = ForkliftHoldSmoother(hold_frames=PROXIMITY_HOLD_FRAMES)
 
     is_calibrated = calibration_mgr.is_calibrated(cam_id)
     ui_settings = load_ui_settings_from_profile(profile.ui_config)
@@ -68,32 +82,68 @@ def _build_camera_context(
         )
 
     posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
-    proximity_analyzer = ProximityAnalyzer() if profile.is_enabled("proximity_analyzer") else None
-    ppe_analyzer = PPEAnalyzer() if profile.is_enabled("ppe_analyzer") else None
+    proximity_analyzer = ProximityAnalyzer() if proximity_enabled else None
+    ppe_analyzer = PPEAnalyzer() if ppe_enabled else None
+
+    person_tracker_source = profile.person_tracker_source
+    if person_tracker_source == "ppe" and not ppe_enabled:
+        logger.warning(
+            "person_tracker_source=ppe but ppe_analyzer is disabled; falling back to pose"
+        )
+        person_tracker_source = "pose"
+
+    fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
+    ergo_every_n = profile.get_schedule("posture_analyzer")
+    proximity_every_n = profile.get_schedule("proximity_analyzer")
+    ppe_every_n = profile.get_schedule("ppe_analyzer")
 
     win_name = f"VisionSafe360 - {cam_id}"
     out_path = OUTPUT_DIR / f"{cam_id}_output.mp4" if not show else None
 
-    return CameraContext(
-        cam_id=cam_id,
+    return PipelineContext(
         stream=stream,
+        engine=engine,                   # shared
+        metrics=metrics,
         event_aggregator=EventAggregator(),
+        calibration_mgr=calibration_mgr, # shared
         track_monitor=TrackQualityMonitor(),
-        det_smoother=DetectionSmoother(grace_frames=TRACK_ID_GRACE_FRAMES),
-        forklift_smoother=ForkliftHoldSmoother(hold_frames=PROXIMITY_HOLD_FRAMES),
+        det_smoother=det_smoother,
+        forklift_smoother=forklift_smoother,
         hazard_analyzer=hazard_analyzer,
         posture_analyzer=posture_analyzer,
         proximity_analyzer=proximity_analyzer,
         ppe_analyzer=ppe_analyzer,
+        ppe_enabled=ppe_enabled,
+        person_tracker_source=person_tracker_source,
+        backend_client=backend_client,   # shared
+        camera_name=BACKEND_CAMERA_NAME or "",
+        worker_id=BACKEND_WORKER_ID or None,
+        worker_gpu_id=BACKEND_WORKER_GPU_ID or None,
+        alert_manager=alert_manager,     # shared
+        siren_controller=siren_controller,  # shared
         renderer=renderer,
         is_calibrated=is_calibrated,
+        fall_every_n=fall_every_n,
+        ergo_every_n=ergo_every_n,
+        proximity_every_n=proximity_every_n,
+        ppe_every_n=ppe_every_n,
+        show=show,
+        headless=False,                  # multi-camera doesn't use headless
         win_name=win_name,
         writer=None,
         out_path=out_path,
+        frame_publisher=None,            # multi-camera doesn't use Redis pub
         frame_counter=0,
         frames_processed=0,
         fps_t0=time.monotonic(),
         inference_fps=0.0,
+        last_offline_flush=time.monotonic(),
+        offline_flush_in_progress=False,
+        offline_flush_thread=None,
+        cumulative_forklift_dets=0,
+        sample_forklift_lines=[],
+        sample_hazard_lines=[],
+        ppe_capable=ppe_capable,
         last_ppe_detections=[],
     )
 
@@ -108,6 +158,7 @@ def run_multi_camera_pipeline(
 
     All cameras share ONE InferenceEngine = ONE set of GPU models.
     This minimizes VRAM usage while processing multiple streams.
+    Each camera gets a full PipelineContext and reuses FrameProcessor.
     """
     logger.info("═══ Starting Multi-Camera Pipeline ═══")
     logger.info("Cameras: %d", len(sources))
@@ -143,36 +194,44 @@ def run_multi_camera_pipeline(
         siren_controller=siren_controller,
     )
 
-    # ── Per-camera contexts ─────────────────────────────────────────
-    cameras: list[CameraContext] = []
+    # ── Per-camera contexts (reusing PipelineContext) ────────────────
+    cam_contexts: list[PipelineContext] = []
+    cam_processors: list[FrameProcessor] = []
     for idx, source in enumerate(sources):
         cam_id = f"cam_{idx + 1:02d}"
-        cam_ctx = _build_camera_context(source, cam_id, show, profile, calibration_mgr)
-        cameras.append(cam_ctx)
+        ctx = _build_multi_camera_context(
+            source=source,
+            cam_id=cam_id,
+            show=show,
+            profile=profile,
+            calibration_mgr=calibration_mgr,
+            engine=engine,
+            backend_client=backend_client,
+            alert_manager=alert_manager,
+            siren_controller=siren_controller,
+            ppe_enabled=ppe_enabled,
+            ppe_capable=ppe_capable,
+            proximity_enabled=proximity_enabled,
+        )
+        cam_contexts.append(ctx)
+        cam_processors.append(FrameProcessor(ctx))
         logger.info("  Camera %s: %s", cam_id, source)
 
     # ── Start all camera streams ────────────────────────────────────
-    for cam in cameras:
-        cam.stream.start()
+    for ctx in cam_contexts:
+        ctx.stream.start()
         if show:
-            cv2.namedWindow(cam.win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-
-    # ── Scheduling ──────────────────────────────────────────────────
-    fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
-    ergo_every_n = profile.get_schedule("posture_analyzer")
-    proximity_every_n = profile.get_schedule("proximity_analyzer")
-    ppe_every_n = profile.get_schedule("ppe_analyzer")
+            cv2.namedWindow(ctx.win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
 
     infer_interval = 1.0 / TARGET_INFER_FPS
     global_shutdown = False
-    last_offline_flush = time.monotonic()
 
     def _handle_signal(signum, _frame):
         nonlocal global_shutdown
         logger.info("Signal %d received — shutting down all cameras", signum)
         global_shutdown = True
-        for cam in cameras:
-            cam.shutdown = True
+        for ctx in cam_contexts:
+            ctx.shutdown = True
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -187,174 +246,42 @@ def run_multi_camera_pipeline(
             loop_start = time.monotonic()
             any_frame_processed = False
 
-            # ── Process each camera ─────────────────────────────────
-            for cam in cameras:
-                if cam.shutdown:
+            # ── Process each camera using shared FrameProcessor ─────
+            for ctx, processor in zip(cam_contexts, cam_processors):
+                if ctx.shutdown:
                     continue
 
-                bundle = cam.stream.get_frame()
+                bundle = ctx.stream.get_frame()
                 if bundle is None:
                     continue
 
                 any_frame_processed = True
-                cam.frame_counter += 1
 
                 # Log progress every 30 frames
-                if cam.frame_counter % 30 == 0:
-                    logger.info("  %s: %d frames processed", cam.cam_id, cam.frame_counter)
+                if ctx.frame_counter > 0 and ctx.frame_counter % 30 == 0:
+                    logger.info("  %s: %d frames processed", ctx.stream.camera_id, ctx.frame_counter)
 
-                # ── Inference (shared engine) ───────────────────────
-                try:
-                    pose_results, detections, det_latency = engine.run_pose_tracker(bundle)
-                except RuntimeError as exc:
-                    if "out of memory" in str(exc).lower():
-                        logger.critical("CUDA OOM: %s", exc)
-                        global_shutdown = True
-                        break
-                    raise
-
-                # ── Proximity detection ─────────────────────────────
-                raw_prox_detections: list = []
-                prox_detections = []
-                prox_latency = 0.0
-                if proximity_enabled:
-                    if cam.frame_counter % proximity_every_n == 0:
-                        raw_prox_detections, prox_latency = engine.run_proximity(bundle)
-                    prox_detections, _ = cam.forklift_smoother.smooth(raw_prox_detections)
-                    detections.extend([d for d in prox_detections if d.class_name == "forklift"])
-
-                # ── PPE detection ───────────────────────────────────
-                ppe_detections = []
-                ppe_latency = 0.0
-                if ppe_enabled and cam.frame_counter % ppe_every_n == 0:
-                    ppe_detections, ppe_latency = engine.run_ppe(bundle)
-                    cam.last_ppe_detections = ppe_detections
-                else:
-                    ppe_detections = cam.last_ppe_detections
-
-                detections = cam.det_smoother.smooth(detections)
-                render_detections = detections + ppe_detections
-
-                n_tracked = sum(1 for d in detections if d.track_id is not None)
-                track_metrics = cam.track_monitor.update(detections, time.time())
-                display_id_map = cam.track_monitor.remap_detections_display_ids(detections)
-
-                # ── Hazard analysis ─────────────────────────────────
-                hazard_events = []
-                ts_now = time.time()
-                if cam.hazard_analyzer is not None:
-                    hazard_events.extend(cam.hazard_analyzer.analyze(
-                        pose_results=pose_results,
-                        detections=detections,
-                        camera_id=cam.cam_id,
-                        frame_number=cam.frame_counter,
-                        timestamp=ts_now,
-                        fall_this_frame=(cam.frame_counter % fall_every_n == 0),
-                    ))
-
-                # ── Posture analysis ────────────────────────────────
-                if cam.posture_analyzer is not None and cam.frame_counter % ergo_every_n == 0:
-                    hazard_events.extend(cam.posture_analyzer.analyze(
-                        pose_results,
-                        camera_id=cam.cam_id,
-                        frame_number=cam.frame_counter,
-                        timestamp=ts_now,
-                    ))
-                    if BACKEND_EVENTS_ENABLED:
-                        for sample in getattr(cam.posture_analyzer, "last_samples", []):
-                            if not getattr(sample, "camera_name", None) and BACKEND_CAMERA_NAME:
-                                sample.camera_name = BACKEND_CAMERA_NAME
-                            if not getattr(sample, "worker_id", None) and BACKEND_WORKER_ID:
-                                sample.worker_id = BACKEND_WORKER_ID
-                            if not getattr(sample, "worker_gpu_id", None) and BACKEND_WORKER_GPU_ID:
-                                sample.worker_gpu_id = BACKEND_WORKER_GPU_ID
-                            backend_client.submit_ergonomic_sample_fast(sample)
-
-                # ── Proximity analysis ──────────────────────────────
-                if cam.proximity_analyzer is not None and prox_detections:
-                    # Merge forklift detections into main detections for analysis
-                    all_detections = detections + [d for d in prox_detections if d.class_name == "forklift"]
-                    hazard_events.extend(cam.proximity_analyzer.analyze(
-                        detections=all_detections,
-                        tracked_pose_people=detections,
-                        camera_id=cam.cam_id,
-                        frame_number=cam.frame_counter,
-                        timestamp=ts_now,
-                    ))
-
-                # ── PPE compliance analysis ────────────────────────
-                if cam.ppe_analyzer is not None and ppe_detections:
-                    hazard_events.extend(cam.ppe_analyzer.analyze(
-                        ppe_detections=ppe_detections,
-                        tracked_people=[d for d in detections if d.class_name == "person"],
-                        camera_id=cam.cam_id,
-                        frame_number=cam.frame_counter,
-                        timestamp=ts_now,
-                    ))
-
-                # ── Event aggregation ───────────────────────────────
-                emitted_events = cam.event_aggregator.process(hazard_events, ts_now)
-                for event in emitted_events:
-                    if not getattr(event, "camera_name", None) and BACKEND_CAMERA_NAME:
-                        event.camera_name = BACKEND_CAMERA_NAME
-                    if not getattr(event, "worker_id", None) and BACKEND_WORKER_ID:
-                        event.worker_id = BACKEND_WORKER_ID
-                    if not getattr(event, "worker_gpu_id", None) and BACKEND_WORKER_GPU_ID:
-                        event.worker_gpu_id = BACKEND_WORKER_GPU_ID
-
-                # ── Rendering ───────────────────────────────────────
-                cam.frames_processed += 1
-                if cam.frames_processed % 30 == 0:
-                    elapsed = time.monotonic() - cam.fps_t0
-                    cam.inference_fps = 30.0 / elapsed if elapsed > 0 else 0.0
-                    cam.fps_t0 = time.monotonic()
-
-                annotated = bundle.frame.copy()
-                cam.renderer.render(
-                    annotated,
-                    detections=render_detections,
-                    pose_results=pose_results,
-                    hazard_events=emitted_events,
-                    display_id_map=display_id_map,
-                    calibrated=cam.is_calibrated,
-                    fps=cam.inference_fps,
-                    latency_ms=det_latency + prox_latency + ppe_latency,
-                    n_det=len(detections),
-                    n_tracked=n_tracked,
-                    vram_mb=engine.vram_used_mb(),
-                    n_hazards=len(emitted_events),
-                    pose_ms=0.0,
-                    track_coverage=track_metrics.get("track_coverage", 0.0),
-                    ppe_capable=ppe_capable,
-                    now=ts_now,
-                )
-
-                # ── Alerting ────────────────────────────────────────
-                if emitted_events and ALERTS_ENABLED:
-                    alert_manager.process_events(emitted_events, frame=annotated)
+                # Reuse FrameProcessor — handles inference, analysis,
+                # rendering, alerting, metrics, and offline flush.
+                result = processor.process(bundle)
 
                 # ── Display / Write ─────────────────────────────────
                 if show:
-                    cv2.imshow(cam.win_name, annotated)
+                    cv2.imshow(ctx.win_name, result.annotated)
                 else:
-                    if cam.writer is None and cam.out_path is not None:
-                        h, w = annotated.shape[:2]
+                    if ctx.writer is None and ctx.out_path is not None:
+                        h, w = result.annotated.shape[:2]
                         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                        cam.writer = cv2.VideoWriter(str(cam.out_path), fourcc, TARGET_INFER_FPS, (w, h))
-                    if cam.writer is not None:
-                        cam.writer.write(annotated)
-
-            # ── Periodic offline flush ──────────────────────────────
-            if BACKEND_EVENTS_ENABLED and (time.monotonic() - last_offline_flush) >= OFFLINE_FLUSH_INTERVAL_SEC:
-                backend_client.flush_offline_queue(limit=OFFLINE_FLUSH_MAX_PER_CYCLE)
-                last_offline_flush = time.monotonic()
+                        ctx.writer = cv2.VideoWriter(str(ctx.out_path), fourcc, TARGET_INFER_FPS, (w, h))
+                    if ctx.writer is not None:
+                        ctx.writer.write(result.annotated)
 
             # ── Check if all streams finished ───────────────────────
-            all_streams_done = all(not cam.stream.is_running for cam in cameras)
+            all_streams_done = all(not ctx.stream.is_running for ctx in cam_contexts)
             if all_streams_done and not any_frame_processed:
                 # Give one more chance to read remaining buffered frames
                 time.sleep(0.1)
-                still_have_frames = any(cam.stream.get_frame() is not None for cam in cameras)
+                still_have_frames = any(ctx.stream.get_frame() is not None for ctx in cam_contexts)
                 if not still_have_frames:
                     logger.info("All camera streams finished")
                     global_shutdown = True
@@ -383,10 +310,10 @@ def run_multi_camera_pipeline(
             alert_manager.shutdown(timeout_sec=2.0)
         except Exception:
             pass
-        for cam in cameras:
-            cam.stream.stop()
-            if cam.writer is not None:
-                cam.writer.release()
+        for ctx in cam_contexts:
+            ctx.stream.stop()
+            if ctx.writer is not None:
+                ctx.writer.release()
 
         if show:
             cv2.destroyAllWindows()
@@ -401,17 +328,17 @@ def run_multi_camera_pipeline(
             pass
 
         logger.info("═══ Multi-Camera Pipeline Finished ═══")
-        for cam in cameras:
+        for ctx in cam_contexts:
             drop_pct = (
-                cam.stream.dropped_count / cam.stream.total_frames_read * 100
-                if cam.stream.total_frames_read > 0 else 0.0
+                ctx.stream.dropped_count / ctx.stream.total_frames_read * 100
+                if ctx.stream.total_frames_read > 0 else 0.0
             )
             logger.info(
                 "  %s: processed=%d  read=%d  dropped=%d (%.1f%%)  reconnects=%d",
-                cam.cam_id,
-                cam.frames_processed,
-                cam.stream.total_frames_read,
-                cam.stream.dropped_count,
+                ctx.stream.camera_id,
+                ctx.frames_processed,
+                ctx.stream.total_frames_read,
+                ctx.stream.dropped_count,
                 drop_pct,
-                cam.stream.reconnect_count,
+                ctx.stream.reconnect_count,
             )

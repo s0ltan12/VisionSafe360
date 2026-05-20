@@ -89,32 +89,6 @@ class PipelineContext:
 
 
 @dataclass
-class CameraContext:
-    """Per-camera state for multi-camera pipeline."""
-    cam_id: str
-    stream: StreamHandler
-    event_aggregator: EventAggregator
-    track_monitor: TrackQualityMonitor
-    det_smoother: DetectionSmoother
-    forklift_smoother: ForkliftHoldSmoother
-    hazard_analyzer: Optional[HazardAnalyzer]
-    posture_analyzer: Optional[PostureAnalyzer]
-    proximity_analyzer: Optional[ProximityAnalyzer]
-    ppe_analyzer: Optional[PPEAnalyzer]
-    renderer: SafetyOverlayRenderer
-    is_calibrated: bool
-    win_name: str
-    writer: Optional[cv2.VideoWriter]
-    out_path: Optional[Path]
-    frame_counter: int
-    frames_processed: int
-    fps_t0: float
-    inference_fps: float
-    last_ppe_detections: list[Any]
-    shutdown: bool = False
-
-
-@dataclass
 class FrameResult:
     """Frame processor result."""
 
