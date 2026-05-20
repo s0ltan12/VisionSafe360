@@ -108,46 +108,33 @@ def root():
 
 # ── Route registration ────────────────────────────────────────────────
 def _register_routes() -> None:
-    # Versioned API — all new integrations should use /api/v1/
-    api_v1 = APIRouter(prefix="/api/v1")
-    api_v1.include_router(stats_router)
-    # api_v1.include_router(health_router)
-    api_v1.include_router(alerts_router)
-    api_v1.include_router(cameras_router)
-    api_v1.include_router(jobs_router)
-    api_v1.include_router(media_router)
-    api_v1.include_router(monitoring_router)
-    api_v1.include_router(incidents_router)
-    api_v1.include_router(users_router)
-    api_v1.include_router(analytics_router)
-    api_v1.include_router(auth_router)
-    api_v1.include_router(ergonomics_router)
-    api_v1.include_router(config_router)
-    api_v1.include_router(notifications_router)
-    api_v1.include_router(edge_config_router)
-    api_v1.include_router(ingest_router)  # internal: edge AI → backend, no auth
-    # api_v1.include_router(incidents_ws_router)
-    # api_v1.include_router(notifications_ws_router)
-    app.include_router(api_v1)
+    # Shared routers mounted under both /api/v1 and /api (legacy).
+    # Define once to prevent drift between versioned and legacy prefixes.
+    _api_routers = [
+        stats_router,
+        alerts_router,
+        cameras_router,
+        jobs_router,
+        media_router,
+        monitoring_router,
+        incidents_router,
+        users_router,
+        analytics_router,
+        auth_router,
+        ergonomics_router,
+        config_router,
+        notifications_router,
+        edge_config_router,
+        ingest_router,  # internal: edge AI → backend, no auth
+    ]
 
-    # Backward-compatible /api prefix (current dashboard paths)
-    legacy_api = APIRouter(prefix="/api")
-    legacy_api.include_router(stats_router)
-    legacy_api.include_router(alerts_router)
-    legacy_api.include_router(cameras_router)
-    legacy_api.include_router(jobs_router)
-    legacy_api.include_router(media_router)
-    legacy_api.include_router(monitoring_router)
-    legacy_api.include_router(incidents_router)
-    legacy_api.include_router(users_router)
-    legacy_api.include_router(analytics_router)
-    legacy_api.include_router(auth_router)
-    legacy_api.include_router(ergonomics_router)
-    legacy_api.include_router(config_router)
-    legacy_api.include_router(notifications_router)
-    legacy_api.include_router(edge_config_router)
-    legacy_api.include_router(ingest_router)  # internal: edge AI → backend, no auth
-    app.include_router(legacy_api)
+    # Versioned API — all new integrations should use /api/v1/
+    # Backward-compatible /api prefix — current dashboard paths
+    for prefix in ("/api/v1", "/api"):
+        group = APIRouter(prefix=prefix)
+        for router in _api_routers:
+            group.include_router(router)
+        app.include_router(group)
 
     # Non-versioned health + WebSocket endpoints
     app.include_router(health_router)
