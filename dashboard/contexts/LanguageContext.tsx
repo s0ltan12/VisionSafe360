@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 
 export type Language = 'en' | 'ar';
 export type Direction = 'ltr' | 'rtl';
@@ -43,10 +43,14 @@ const translations = {
     // Ergonomics
     ergonomicExposure: "Postural Risk Exposure",
     rulaScore: "Avg RULA Score",
+    rebaScore: "Avg REBA Score",
     riskyDuration: "Risky Posture Duration",
     badPostures: "Bad Postures Detected",
     ergoTrends: "Ergonomic Trends",
     riskByZone: "Risk Distribution by Zone",
+    noErgonomicData: "No ergonomic records available yet.",
+    runPostureAnalysis: "Run posture analysis from the edge pipeline to populate this view with live backend data.",
+    records: "Records",
 
     // Health
     edgeNodes: "Edge Computing Nodes",
@@ -64,6 +68,28 @@ const translations = {
     criticalZones: "High Risk Zones",
     viewAllZones: "View Map",
     liveIncidentFeed: "Recent Activity",
+    sources: "Sources",
+    uploadVideo: "Upload Video",
+    workerActive: "Worker Active",
+    workerOffline: "Worker Offline",
+    file: "File",
+    stream: "Stream",
+    start: "Start",
+    stop: "Stop",
+    loading: "Loading",
+    connectingAiStream: "Connecting to AI stream",
+    aiStreamUnavailable: "AI stream unavailable",
+    waitingForFrames: "Waiting for annotated frames from the edge worker.",
+    startWorkerForAi: "Start the worker to publish annotated AI frames.",
+    recording: "Recording",
+    availableSources: "Available Sources",
+    noVideoSources: "No video sources available. Upload a test video to begin monitoring.",
+    realTimeDetectionStream: "Real-time detection stream",
+    initializingFeed: "Initializing feed",
+    noIncidentsYet: "No incidents yet",
+    monitoringForHazards: "System is monitoring for hazards. New alerts will appear here in real time.",
+    selectSourceToStart: "Select a source to start",
+    viewFullHistory: "Refresh History",
     viewAllEvents: "Full History",
     highRisk: "DANGER",
     processing: "Active",
@@ -191,10 +217,14 @@ const translations = {
     // Ergonomics
     ergonomicExposure: "التعرض لمخاطر الوضعيات",
     rulaScore: "متوسط مؤشر RULA",
+    rebaScore: "متوسط مؤشر REBA",
     riskyDuration: "مدة الوضعيات الخطرة",
     badPostures: "وضعيات خاطئة مكتشفة",
     ergoTrends: "اتجاهات الهندسة البشرية",
     riskByZone: "توزيع المخاطر حسب المنطقة",
+    noErgonomicData: "لا توجد سجلات هندسة بشرية متاحة بعد.",
+    runPostureAnalysis: "شغّل تحليل الوضعيات من خط الحافة لملء هذه الصفحة ببيانات مباشرة من الخلفية.",
+    records: "سجلات",
 
     // Health
     edgeNodes: "عقد حوسبة الحافة",
@@ -212,6 +242,28 @@ const translations = {
     criticalZones: "المناطق عالية الخطورة",
     viewAllZones: "عرض الخريطة",
     liveIncidentFeed: "النشاط الأخير",
+    sources: "مصادر",
+    uploadVideo: "رفع فيديو",
+    workerActive: "العامل نشط",
+    workerOffline: "العامل غير متصل",
+    file: "ملف",
+    stream: "بث",
+    start: "بدء",
+    stop: "إيقاف",
+    loading: "جار التحميل",
+    connectingAiStream: "جار الاتصال ببث الذكاء الاصطناعي",
+    aiStreamUnavailable: "بث الذكاء الاصطناعي غير متاح",
+    waitingForFrames: "في انتظار الإطارات المعالجة من عامل الحافة.",
+    startWorkerForAi: "ابدأ العامل لنشر إطارات الذكاء الاصطناعي المعالجة.",
+    recording: "تسجيل",
+    availableSources: "المصادر المتاحة",
+    noVideoSources: "لا توجد مصادر فيديو. ارفع فيديو تجريبياً لبدء المراقبة.",
+    realTimeDetectionStream: "بث الاكتشاف اللحظي",
+    initializingFeed: "تهيئة البث",
+    noIncidentsYet: "لا توجد حوادث بعد",
+    monitoringForHazards: "النظام يراقب المخاطر. ستظهر التنبيهات الجديدة هنا فوراً.",
+    selectSourceToStart: "اختر مصدراً للبدء",
+    viewFullHistory: "تحديث السجل",
     viewAllEvents: "السجل الكامل",
     highRisk: "خطر",
     processing: "نشط",
@@ -304,10 +356,27 @@ const translations = {
 };
 
 const LanguageContext = createContext<any>(null);
+const LANGUAGE_STORAGE_KEY = 'visionsafe360_language';
+
+const getInitialLanguage = (): Language => {
+  if (typeof window === 'undefined') return 'ar';
+  const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  return saved === 'en' || saved === 'ar' ? saved : 'ar';
+};
 
 export const LanguageProvider = ({ children }: { children?: React.ReactNode }) => {
-  const [language, setLanguage] = useState<Language>('ar');
+  const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const dir = language === 'ar' ? 'rtl' : 'ltr';
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    }
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = language;
+      document.documentElement.dir = dir;
+    }
+  }, [dir, language]);
 
   const t = (key: keyof typeof translations['en']) => {
     // @ts-ignore

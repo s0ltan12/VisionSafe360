@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# System dependencies needed by OpenCV
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install backend requirements first (cached layer)
+COPY requirements.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# Install edge AI requirements, including CUDA-enabled PyTorch for GPU inference
+COPY requirements.worker.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --default-timeout=2000 -r requirements.worker.txt
+
+COPY . .
+
+CMD ["python", "worker.py"]

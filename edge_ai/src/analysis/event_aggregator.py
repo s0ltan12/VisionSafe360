@@ -24,6 +24,8 @@ from ..config.settings import (
     EVENT_MAX_UPDATES_PER_WINDOW,
     FALL_COOLDOWN_SEC,
     FALL_PERSISTENCE_SEC,
+    HAZARD_COOLDOWN_SEC,
+    PPE_MISSING_PERSISTENCE_SEC,
 )
 
 logger = logging.getLogger(__name__)
@@ -156,6 +158,8 @@ class EventAggregator:
         """Required persistence duration in seconds before event emission."""
         if "fall" in event_type:
             return FALL_PERSISTENCE_SEC  # 0 — fall has its own state machine
+        if event_type.startswith("ppe_") or event_type in {"no_helmet", "no_vest"}:
+            return PPE_MISSING_PERSISTENCE_SEC
         return 0.0  # posture, etc.
 
     @staticmethod
@@ -163,7 +167,7 @@ class EventAggregator:
         """Cooldown duration after emission."""
         if "fall" in event.event_type:
             return FALL_COOLDOWN_SEC
-        return 30.0  # default
+        return HAZARD_COOLDOWN_SEC
 
     @property
     def pending_count(self) -> int:

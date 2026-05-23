@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from app.config.database import get_db
-from app.services.redis_client import get_redis_client, redis_available
+from ...config.database import get_db
+from ...services.redis_client import redis_available
 
 router = APIRouter(tags=["health"])
 

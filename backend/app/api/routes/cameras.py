@@ -1,21 +1,21 @@
-"""Camera routes with pagination."""
+"""Camera routes with stream control endpoints."""
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from ...config.database import get_db
-from ...config.settings import settings
-from ...schemas import CameraCreate, CameraOut, CameraUpdate, PaginatedResponse
+from ...schemas import CameraCreate, CameraOut, CameraUpdate
 from ...services.camera_service import CameraService
-from ...utils.security import get_current_user
+from ...services.job_service import job_service
+from ...utils.permissions import require_roles
 
 router = APIRouter(
     prefix="/cameras",
     tags=["cameras"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin", "operator"))],
 )
 
 
@@ -43,3 +43,106 @@ def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(g
 def delete_camera(camera_id: str, db: Session = Depends(get_db)):
     if not CameraService.delete(db, camera_id):
         raise HTTPException(status_code=404, detail="Camera not found")
+
+
+# ── Stream control endpoints ──────────────────────────────────────────
+
+@router.post("/{camera_id}/start")
+def start_camera_stream(
+    camera_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Start AI detection on a camera's configured stream_url.
+
+    Looks up the camera in DB, resolves its stream_url, and enqueues the
+    edge AI worker job. Returns job status + stream source info.
+    """
+    camera = CameraService.get(db, camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+
+    if not camera.stream_url:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Camera '{camera_id}' has no stream_url configured. "
+                   "Update stream_url via PATCH /api/cameras/{camera_id} first.",
+        )
+
+    token: str | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+
+    try:
+        status = job_service.start(
+            source_name=camera.stream_url,
+            camera_id=camera_id,
+            auth_token=token,
+            db=db,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Mark camera as Online/Streaming
+    CameraService.update(db, camera_id, CameraUpdate(status="Online"))
+
+    return {
+        "job_id": status.get("source_name"),
+        "status": "streaming",
+        "source": camera.stream_url,
+        "camera_id": camera_id,
+        "camera_name": camera.name,
+        "ws_stream_url": f"/ws/stream/{camera_id}",
+        "worker": status,
+    }
+
+
+@router.post("/{camera_id}/stop")
+def stop_camera_stream(
+    camera_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Stop the AI detection worker and mark camera as offline."""
+    camera = CameraService.get(db, camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+
+    status = job_service.stop(camera_id)
+    CameraService.update(db, camera_id, CameraUpdate(status="Offline"))
+
+    return {
+        "status": "stopped",
+        "camera_id": camera_id,
+        "camera_name": camera.name,
+        "worker": status,
+    }
+
+
+@router.get("/{camera_id}/status")
+def get_camera_stream_status(
+    camera_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return camera info combined with current job/stream status."""
+    camera = CameraService.get(db, camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+
+    job_status = job_service.status(camera_id)
+    is_this_camera_running = (
+        job_status.get("running")
+        and job_status.get("camera_id") == camera_id
+    )
+
+    return {
+        "camera_id": camera.id,
+        "camera_name": camera.name,
+        "zone": camera.zone,
+        "status": camera.status,
+        "stream_url": camera.stream_url,
+        "ws_stream_url": f"/ws/stream/{camera_id}",
+        "streaming": is_this_camera_running,
+        "job": job_status if is_this_camera_running else None,
+    }

@@ -1,0 +1,12 @@
+# Edge AI dependencies for the worker container
+# These are needed because the worker spawns `python -m src.main` from edge_ai/
+# Pin CUDA-enabled PyTorch wheels so YOLO can use the NVIDIA GPU in Docker.
+# CUDA 12.4 wheels are compatible with the host NVIDIA 595 driver.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+ultralytics==8.4.16
+numpy<2.5
+lapx==0.9.4
+PyYAML>=6.0
+requests>=2.31

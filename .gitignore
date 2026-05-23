@@ -72,10 +72,10 @@ coverage/
 .cache/
 
 # =========================
-# Machine Learning & AI
-# =========================
-*.pt
+# AI
+# =========================git 
 *.pth
+*.pt
 *.onnx
 *.engine
 *.pb
@@ -110,5 +110,11 @@ output/
 # Documentation
 # =========================
 *.md
+*.docx
+*.pdf
+*.svg
+*.png
+*.jpg
+*.jpeg
 docs/
 doc_ai/

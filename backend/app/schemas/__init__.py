@@ -1,42 +1,42 @@
-"""Pydantic schema exports."""
-from .schemas import (
+"""Pydantic schema exports.
+
+Schemas are organized per-entity under this package. This module preserves the
+flat `from ..schemas import X` import surface used across the codebase.
+"""
+from .alert import (
+    AlertBase,
     AlertCreate,
+    AlertEventOut,
     AlertOut,
     AlertUpdate,
-    CameraCreate,
-    CameraOut,
-    CameraUpdate,
-    ErgonomicRecordCreate,
-    ErgonomicRecordOut,
-    IncidentCreate,
-    IncidentOut,
-    IncidentUpdate,
-    JobStartRequest,
-    JobStatusResponse,
-    LoginRequest,
+)
+from .auth import LoginRequest, TokenPayload, TokenResponse
+from .camera import CameraBase, CameraCreate, CameraOut, CameraUpdate
+from .ergonomic_record import ErgonomicRecordCreate, ErgonomicRecordOut
+from .incident import IncidentBase, IncidentCreate, IncidentOut, IncidentUpdate
+from .job import JobStartRequest, JobStatusResponse
+from .notification import (
     NotificationCreate,
     NotificationMarkRead,
     NotificationOut,
-    PaginatedResponse,
+)
+from .pagination import PaginatedResponse
+from .system_config import (
     SystemConfigCreate,
     SystemConfigOut,
     SystemConfigUpdate,
-    TokenPayload,
-    TokenResponse,
-    UserCreate,
-    UserOut,
-    UserUpdate,
 )
+from .user import UserBase, UserCreate, UserOut, UserUpdate
 
 __all__ = [
-    "AlertCreate", "AlertOut", "AlertUpdate",
-    "CameraCreate", "CameraOut", "CameraUpdate",
+    "AlertBase", "AlertCreate", "AlertEventOut", "AlertOut", "AlertUpdate",
+    "CameraBase", "CameraCreate", "CameraOut", "CameraUpdate",
     "ErgonomicRecordCreate", "ErgonomicRecordOut",
-    "IncidentCreate", "IncidentOut", "IncidentUpdate",
+    "IncidentBase", "IncidentCreate", "IncidentOut", "IncidentUpdate",
     "JobStartRequest", "JobStatusResponse",
     "LoginRequest", "TokenPayload", "TokenResponse",
     "NotificationCreate", "NotificationMarkRead", "NotificationOut",
     "PaginatedResponse",
     "SystemConfigCreate", "SystemConfigOut", "SystemConfigUpdate",
-    "UserCreate", "UserOut", "UserUpdate",
+    "UserBase", "UserCreate", "UserOut", "UserUpdate",
 ]

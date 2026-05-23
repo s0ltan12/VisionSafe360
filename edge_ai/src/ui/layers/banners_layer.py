@@ -42,14 +42,24 @@ def _banner_alpha(age: float, total_sec: float, fade_sec: float) -> float:
         return 0.0
     if age < total_sec - fade_sec:
         return 1.0
-    # Linear fade in the final fade_sec window
-    return (total_sec - age) / fade_sec
+    # Smooth quadratic fade-out instead of plain linear
+    p = (total_sec - age) / fade_sec
+    return float(p * p)
 
 
 def _ease_out_cubic(x: float) -> float:
     """Smooth and restrained settle used for card entrance."""
     t = max(0.0, min(1.0, x))
     return 1.0 - pow(1.0 - t, 3.0)
+
+
+def _ease_out_back(x: float) -> float:
+    """Beautiful, damped spring overshoot and settle (Apple fluid style)."""
+    t = max(0.0, min(1.0, x))
+    c1 = 0.38  # soft spring bounce overshoot
+    c3 = c1 + 1.0
+    tm = t - 1.0
+    return float(1.0 + c3 * pow(tm, 3.0) + c1 * pow(tm, 2.0))
 
 
 def _truncate_text_to_width(
@@ -163,23 +173,23 @@ def _notification_copy(
     include_worker_id: bool,
     display_id_map: Optional[Dict[int, int]],
 ) -> tuple[str, str]:
-    """Build concise title/body copy that follows Apple notification guidance."""
+    """Build detailed title/body copy for safety banners."""
     title = _prettify_event_type(ev.event_type)
 
-    if include_worker_id and ev.track_id is not None:
+    if ev.track_id is not None:
         disp_id = (display_id_map or {}).get(ev.track_id, ev.track_id)
         subject = f"Worker D{disp_id}"
     else:
-        subject = "A worker"
+        subject = "Worker D1"
 
     location = (
         str(ev.metadata.get("location", "")).strip()
         or str(ev.metadata.get("zone_name", "")).strip()
         or f"Camera {ev.camera_id}"
     )
-    body = f"{location}"
-    if include_worker_id and ev.track_id is not None:
-        body = f"{body} - {subject}"
+    
+    desc = ev.description or "Safety hazard detected"
+    body = f"{location} | {subject} - {desc}"
     return title, body
 
 
@@ -422,7 +432,7 @@ class BannersLayer:
         active = active[:cfg.banner_max]
 
         banner_h = int(72 * cfg.overlay_scale)
-        banner_w = int(max(320, min(640, fw * 0.62)))
+        banner_w = int(max(380, min(850, fw * 0.75)))
         x0 = (fw - banner_w) // 2
         radius = max(14, int(cfg.banner_corner_radius * 1.35))
         meta_scale = t.font_md * 0.95 * cfg.overlay_scale
@@ -438,10 +448,35 @@ class BannersLayer:
 
         for ts, ev, alpha in active:
             age = now - ts
-            enter_p = _ease_out_cubic(min(1.0, age / max(0.05, cfg.banner_enter_sec)))
-            slide_px = int((1.0 - enter_p) * 16)
-            y = y_offset - slide_px
+            # Calculate both entrance slide-in and exit slide-out animations
+            enter_p = _ease_out_back(min(1.0, age / max(0.05, cfg.banner_enter_sec)))
+            exit_p = 0.0
+            fade_start = cfg.banner_critical_sec - cfg.banner_fade_sec
+            if age >= fade_start:
+                exit_p = min(1.0, (age - fade_start) / max(0.05, cfg.banner_fade_sec))
+            
+            # Slide in from -32px with Apple elastic bounce, then accelerate slide out
+            slide_in = (1.0 - enter_p) * 32
+            slide_out = (exit_p * exit_p * exit_p) * 32
+            y = y_offset - int(slide_in) - int(slide_out)
+            
             overlay = frame.copy()
+            
+            # --- Frosted Glassmorphism Background Blur (Apple-style) ---
+            rx0, ry0 = x0, y
+            rx1, ry1 = x0 + banner_w, y + banner_h
+            rx0 = max(0, min(fw - 1, rx0))
+            ry0 = max(0, min(fh - 1, ry0))
+            rx1 = max(0, min(fw - 1, rx1))
+            ry1 = max(0, min(fh - 1, ry1))
+            
+            if rx1 > rx0 and ry1 > ry0:
+                bg_crop = frame[ry0:ry1, rx0:rx1].copy()
+                bg_blur = cv2.GaussianBlur(bg_crop, (25, 25), 0)
+                # Frosted effect blend
+                glass_color = np.full_like(bg_blur, (248, 248, 248), dtype=np.uint8)
+                frosted = cv2.addWeighted(bg_blur, 0.40, glass_color, 0.60, 0)
+                overlay[ry0:ry1, rx0:rx1] = frosted
 
             title_text, body_text = _notification_copy(
                 ev,

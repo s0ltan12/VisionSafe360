@@ -19,12 +19,59 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── Redis 7 ───────────────────────────────────────────────────────
-  redis:
+  # ── Redis 7: queue payloads, durable and never evicted ────────────
+  redis-queue:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server","--maxmemory","256mb","--maxmemory-policy","allkeys-lru","--save",""
-    ]
+    command: ["redis-server","--maxmemory","256mb","--maxmemory-policy","noeviction","--appendonly","yes"]
+    volumes:
+      - redis_queue_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Redis 7: orchestration state and rate counters ────────────────
+  redis-state:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--maxmemory","128mb","--maxmemory-policy","noeviction","--appendonly","yes"]
+    volumes:
+      - redis_state_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Redis 7: realtime event streams/pubsub ────────────────────────
+  redis-events:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--maxmemory","128mb","--maxmemory-policy","noeviction","--appendonly","yes"]
+    volumes:
+      - redis_events_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Redis 7: latest-frame cache, isolated from control data ───────
+  redis-streaming:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--maxmemory","512mb","--maxmemory-policy","volatile-ttl","--save",""]
     networks:
       - internal
     healthcheck:
@@ -39,28 +86,40 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     restart: unless-stopped
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      redis-queue:
+        condition: service_healthy
+      redis-state:
+        condition: service_healthy
+      redis-events:
+        condition: service_healthy
+      redis-streaming:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+pg8000://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-visionsafe360}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
-      REDIS_HOST: redis
+      REDIS_HOST: redis-state
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_QUEUE_HOST: redis-queue
+      REDIS_STATE_HOST: redis-state
+      REDIS_EVENTS_HOST: redis-events
+      REDIS_STREAMING_HOST: redis-streaming
       SENTRY_DSN: ${SENTRY_DSN:-}
       APP_ENV: ${APP_ENV:-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      SEED_DATA: ${SEED_DATA:-true}
       LOG_JSON: "true"
     volumes:
-      - ./edge_ai/vids_test:/app/edge_ai/vids_test:ro
+      - ./edge_ai/vids_test:/app/edge_ai/vids_test
       - ./backend/logs:/app/backend/logs
     networks:
       - internal
@@ -75,26 +134,48 @@ services:
   worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.worker
+      network: host
     restart: unless-stopped
     command: python worker.py
     depends_on:
       backend:
         condition: service_healthy
-      redis:
+      redis-queue:
+        condition: service_healthy
+      redis-state:
+        condition: service_healthy
+      redis-streaming:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+pg8000://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-visionsafe360}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
-      REDIS_HOST: redis
+      REDIS_HOST: redis-state
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_QUEUE_HOST: redis-queue
+      REDIS_STATE_HOST: redis-state
+      REDIS_STREAMING_HOST: redis-streaming
       APP_ENV: ${APP_ENV:-production}
+      VISIONSAFE_BACKEND_URL: http://backend:8000
+      MEDIAMTX_URL: rtsp://mediamtx:8554
+      SEED_DATA: ${SEED_DATA:-true}
+      VISIONSAFE_WORKER_CAPACITY: ${VISIONSAFE_WORKER_CAPACITY:-1}
+      VISIONSAFE_WORKER_POOL_SIZE: ${VISIONSAFE_WORKER_POOL_SIZE:-4}
     volumes:
-      - ./edge_ai:/app/edge_ai:ro
+      - ./backend/app:/app/app
+      - ./backend/worker.py:/app/worker.py
+      - ./edge_ai:/app/edge_ai
       - ./backend/logs:/app/backend/logs
     networks:
       - internal
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ── Nginx + React Dashboard ───────────────────────────────────────
   dashboard:
@@ -117,7 +198,18 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
+# ── MediaMTX — RTSP/HLS/WebRTC relay server ───────────────────────
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: visionsafe360-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+      - "8891:8888"
+      - "8892:8889"
+      - "8890:8890/udp" # RTSP/UDP
+    networks:
+      - internal
   # ── pgAdmin 4 ─────────────────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -143,3 +235,6 @@ networks:
 volumes:
   postgres_data:
   pgadmin_data:
+  redis_queue_data:
+  redis_state_data:
+  redis_events_data:

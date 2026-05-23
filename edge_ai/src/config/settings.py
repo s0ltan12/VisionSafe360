@@ -86,6 +86,7 @@ PROXIMITY_MAX_DET = 50
 PPE_CONF_THRESHOLD = 0.30
 PPE_IOU_THRESHOLD = 0.50
 PPE_MAX_DET = 100
+PPE_MISSING_PERSISTENCE_SEC = _env_float("VISIONSAFE_PPE_MISSING_PERSISTENCE_SEC", 3.0)
 
 # When using generic COCO weights, forklift is often classified as "truck".
 PROXIMITY_FORKLIFT_ALIASES = {"forklift", "truck"}
@@ -95,8 +96,8 @@ PROXIMITY_DANGER_PX = 80.0
 PROXIMITY_WARNING_PX = 140.0
 
 # --- FPS targets
-TARGET_INPUT_FPS = 15  # cap RTSP / file read rate
-TARGET_INFER_FPS = 15  # inference loop target
+TARGET_INPUT_FPS = 17  # cap RTSP / file read rate
+TARGET_INFER_FPS = 17  # inference loop target
 
 # --- Per-task scheduling (frame counter modulo)
 POSE_EVERY_N = 1
@@ -141,6 +142,9 @@ BACKEND_URL = os.getenv("VISIONSAFE_BACKEND_URL", DEFAULT_BACKEND_URL)
 BACKEND_INCIDENTS_PATH = os.getenv("VISIONSAFE_BACKEND_INCIDENTS_PATH", "/api/incidents")
 BACKEND_AUTH_TOKEN = os.getenv("VISIONSAFE_BACKEND_AUTH_TOKEN", "")
 BACKEND_SOURCE_ID = os.getenv("VISIONSAFE_BACKEND_SOURCE_ID", "")
+BACKEND_CAMERA_NAME = os.getenv("VISIONSAFE_BACKEND_CAMERA_NAME", "")
+BACKEND_WORKER_ID = os.getenv("VISIONSAFE_BACKEND_WORKER_ID", "")
+BACKEND_WORKER_GPU_ID = os.getenv("VISIONSAFE_BACKEND_WORKER_GPU_ID", "")
 
 DEFAULT_BACKEND_TIMEOUT = 5.0
 BACKEND_TIMEOUT = _env_float("VISIONSAFE_BACKEND_TIMEOUT", DEFAULT_BACKEND_TIMEOUT)
@@ -213,22 +217,22 @@ FALL_IMMOBILITY_THRESHOLD = 5.0  # max px movement to count as "immobile"
 FALL_AREA_JITTER_THRESHOLD = 0.15  # max relative area change for immobility
 FALL_SEATED_GUARD_DY = 6.0  # if vertical motion is below this, treat as stable low posture
 FALL_SEATED_GUARD_AR_SPREAD = 0.10  # low aspect-ratio variation suggests seated/static posture
-FALL_COOLDOWN_SEC = 20.0  # before same track re-fires
+FALL_COOLDOWN_SEC = _env_float("VISIONSAFE_FALL_COOLDOWN_SEC", 50.0)  # before same track re-fires
 FALL_TRACK_PURGE_SEC = 5.0  # purge stale track state
 
 # --- PostureAnalyzer thresholds
 POSTURE_KEYPOINT_CONF_MIN = 0.5  # discard keypoints below this
 POSTURE_EMA_ALPHA = 0.6  # temporal smoothing weight
 POSTURE_SUSTAINED_THRESHOLD = 4.0  # seconds of poor posture before event
-POSTURE_COOLDOWN_SEC = 20.0  # per track_id cooldown
+POSTURE_COOLDOWN_SEC = _env_float("VISIONSAFE_POSTURE_COOLDOWN_SEC", 50.0)  # per track_id cooldown
 TEMPORAL_SMOOTH_WINDOW = 5
 ERGONOMIC_SCORE_WINDOW = 90  # frames at 1.5Hz ~ 60s
 
 # --- Event Persistence / Aggregation
 FALL_PERSISTENCE_SEC = 0.0  # fall already has candidate->confirm
+HAZARD_COOLDOWN_SEC = _env_float("VISIONSAFE_HAZARD_COOLDOWN_SEC", 50.0)
 EVENT_AGGREGATION_WINDOW_SEC = 5.0  # aggregate repeated events within window
 EVENT_MAX_UPDATES_PER_WINDOW = 3  # max severity escalations per window
 
 # --- Calibration (camera -> ground-plane)
 DEFAULT_PIXELS_PER_METER = 0.0  # 0 = uncalibrated (pixel mode)
-

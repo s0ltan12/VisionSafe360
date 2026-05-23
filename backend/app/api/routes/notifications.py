@@ -13,12 +13,13 @@ from ...config.settings import settings
 from ...models import Notification
 from ...schemas import NotificationCreate, NotificationMarkRead, NotificationOut, PaginatedResponse
 from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 from ...api.websocket.ws_notifications import notification_ws_manager
 
 router = APIRouter(
     prefix="/notifications",
     tags=["notifications"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin", "operator", "viewer"))],
 )
 
 

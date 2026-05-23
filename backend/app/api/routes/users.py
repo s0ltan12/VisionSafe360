@@ -9,12 +9,12 @@ from sqlalchemy.orm import Session
 from ...config.database import get_db
 from ...schemas import UserCreate, UserOut, UserUpdate
 from ...services.auth_service import UserService
-from ...utils.security import get_current_user
+from ...utils.permissions import require_roles
 
 router = APIRouter(
     prefix="/users",
     tags=["users"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_roles("admin"))],
 )
 
 
