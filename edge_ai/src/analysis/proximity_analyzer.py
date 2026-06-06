@@ -23,6 +23,7 @@ from ..config.settings import (
     FORKLIFT_DEDUP_CENTER_RATIO,
     FORKLIFT_DEDUP_IOU,
     FORKLIFT_OVERSPEED_CONFIRMATION_SEC,
+    PROXIMITY_RESOLUTION_GRACE_SEC,
     PROXIMITY_DANGER_PX,
     PROXIMITY_WARNING_PX,
     EventTypes,
@@ -61,6 +62,15 @@ class _OverspeedState:
     severity: str
     context: str
     confirmed: bool = False
+
+
+@dataclass(slots=True)
+class _WorkerSurrogateState:
+    surrogate_id: int
+    bbox: Tuple[int, int, int, int]
+    center: Tuple[float, float]
+    first_seen: float
+    last_seen: float
 
 
 def _center(bbox: Tuple[int, int, int, int]) -> Tuple[float, float]:
@@ -115,6 +125,8 @@ class ProximityAnalyzer:
         self._pair_first_seen: dict[tuple, float] = {}
         self._pair_last_seen: dict[tuple, float] = {}
         self._overspeed_states: dict[tuple, _OverspeedState] = {}
+        self._worker_surrogates: dict[tuple[str, int], _WorkerSurrogateState] = {}
+        self._next_worker_surrogate_id = 1
 
     def prepare_detections(
         self,
@@ -367,6 +379,7 @@ class ProximityAnalyzer:
             )
 
         events: List[HazardEvent] = []
+        used_worker_surrogates: set[int] = set()
 
         for person in persons:
             track_id = person.track_id
@@ -383,6 +396,14 @@ class ProximityAnalyzer:
                 track_id is not None
                 and int(track_id) > 0
                 and not track_fallback
+            )
+            worker_identity_key, worker_identity_source, worker_surrogate_id = self._worker_identity_key(
+                camera_id=camera_id,
+                person=person,
+                timestamp=timestamp,
+                has_stable_worker_track=has_stable_worker_track,
+                track_id=track_id,
+                used_surrogates=used_worker_surrogates,
             )
 
             distance_candidates = [
@@ -408,7 +429,7 @@ class ProximityAnalyzer:
                 point_m=distance_result.forklift_ground_point,
             )
             worker_motion = self._worker_motion.update(
-                ("worker", track_id or id(person)),
+                ("worker", worker_identity_key),
                 distance_result.worker_bottom_center,
                 timestamp,
                 point_m=distance_result.worker_ground_point,
@@ -420,8 +441,8 @@ class ProximityAnalyzer:
                 timestamp,
             )
 
-            pair_key = self._pair_key(camera_id, near_forklift, person)
-            operational_case_key = self._operational_case_key(camera_id, near_forklift, person)
+            pair_key = self._pair_key(camera_id, near_forklift, worker_identity_key)
+            operational_case_key = self._operational_case_key(camera_id, near_forklift, worker_identity_key)
             tracking_confidence = _tracking_confidence(
                 person.track_id,
                 near_forklift.track_id,
@@ -503,6 +524,9 @@ class ProximityAnalyzer:
                 "worker_track_id_fallback": not has_stable_worker_track,
                 "worker_track_id_source": track_method if has_stable_worker_track else "fallback",
                 "worker_track_match_method": track_method,
+                "worker_identity_key": _metadata_key(worker_identity_key),
+                "worker_identity_source": worker_identity_source,
+                "worker_surrogate_id": worker_surrogate_id,
                 "composite_eligible": has_stable_worker_track,
                 **distance_result.metadata(),
                 **forklift_motion.metadata("forklift"),
@@ -790,15 +814,99 @@ class ProximityAnalyzer:
             driver_result.cabin_overlap_ratio,
         )
 
-    def _pair_key(self, camera_id: str, forklift: Detection, person: Detection) -> tuple:
-        forklift_key = forklift.track_id if forklift.track_id is not None else ("forklift_bbox", _quantized_center(forklift.bbox))
-        person_key = person.track_id if person.track_id is not None else ("person_bbox", _quantized_center(person.bbox))
-        return camera_id, forklift_key, person_key
+    def _worker_identity_key(
+        self,
+        *,
+        camera_id: str,
+        person: Detection,
+        timestamp: float,
+        has_stable_worker_track: bool,
+        track_id: Optional[int],
+        used_surrogates: set[int],
+    ) -> tuple | int:
+        if has_stable_worker_track and track_id is not None:
+            return track_id, "stable_track", None
+        surrogate_id, source = self._resolve_worker_surrogate(
+            camera_id=camera_id,
+            bbox=person.bbox,
+            timestamp=timestamp,
+            used_surrogates=used_surrogates,
+        )
+        used_surrogates.add(surrogate_id)
+        return ("worker_surrogate", surrogate_id), source, surrogate_id
 
-    def _operational_case_key(self, camera_id: str, forklift: Detection, person: Detection) -> tuple:
+    def _resolve_worker_surrogate(
+        self,
+        *,
+        camera_id: str,
+        bbox: Tuple[int, int, int, int],
+        timestamp: float,
+        used_surrogates: set[int],
+    ) -> tuple[int, str]:
+        self._purge_worker_surrogates(timestamp)
+        center = _center(bbox)
+        best_key = None
+        best_score = float("inf")
+        best_source = "surrogate_new"
+        for key, state in self._worker_surrogates.items():
+            state_camera_id, surrogate_id = key
+            if state_camera_id != camera_id or surrogate_id in used_surrogates:
+                continue
+            age = timestamp - state.last_seen
+            if age > PROXIMITY_RESOLUTION_GRACE_SEC:
+                continue
+            iou = _iou(bbox, state.bbox)
+            distance = math.hypot(center[0] - state.center[0], center[1] - state.center[1])
+            max_dim = max(
+                1.0,
+                float(bbox[2] - bbox[0]),
+                float(bbox[3] - bbox[1]),
+                float(state.bbox[2] - state.bbox[0]),
+                float(state.bbox[3] - state.bbox[1]),
+            )
+            max_distance = max(80.0, max_dim * 1.75)
+            if iou < 0.02 and distance > max_distance:
+                continue
+            score = distance - (iou * max_dim)
+            if score < best_score:
+                best_key = key
+                best_score = score
+                best_source = "surrogate_iou" if iou >= 0.02 else "surrogate_centroid"
+
+        if best_key is None:
+            surrogate_id = self._next_worker_surrogate_id
+            self._next_worker_surrogate_id += 1
+            best_key = (camera_id, surrogate_id)
+            self._worker_surrogates[best_key] = _WorkerSurrogateState(
+                surrogate_id=surrogate_id,
+                bbox=bbox,
+                center=center,
+                first_seen=timestamp,
+                last_seen=timestamp,
+            )
+            return surrogate_id, "surrogate_new"
+
+        state = self._worker_surrogates[best_key]
+        state.bbox = bbox
+        state.center = center
+        state.last_seen = timestamp
+        return state.surrogate_id, best_source
+
+    def _purge_worker_surrogates(self, timestamp: float) -> None:
+        stale = [
+            key for key, state in self._worker_surrogates.items()
+            if timestamp - state.last_seen > PROXIMITY_RESOLUTION_GRACE_SEC
+        ]
+        for key in stale:
+            self._worker_surrogates.pop(key, None)
+
+    def _pair_key(self, camera_id: str, forklift: Detection, worker_identity_key) -> tuple:
         forklift_key = forklift.track_id if forklift.track_id is not None else ("forklift_bbox", _quantized_center(forklift.bbox))
-        worker_key = person.track_id if person.track_id is not None else ("worker_bbox", _quantized_center(person.bbox))
-        return camera_id, forklift_key, worker_key
+        return camera_id, forklift_key, worker_identity_key
+
+    def _operational_case_key(self, camera_id: str, forklift: Detection, worker_identity_key) -> tuple:
+        forklift_key = forklift.track_id if forklift.track_id is not None else ("forklift_bbox", _quantized_center(forklift.bbox))
+        return camera_id, forklift_key, worker_identity_key
 
     def _update_pair_persistence(self, pair_key: tuple, timestamp: float) -> float:
         self._purge_pair_state(timestamp)
@@ -851,6 +959,14 @@ def _severity_from_overspeed(severity: str) -> Severity:
 def _quantized_center(bbox: Tuple[int, int, int, int]) -> tuple[int, int]:
     cx, cy = _center(bbox)
     return int(round(cx / 25.0) * 25), int(round(cy / 25.0) * 25)
+
+
+def _metadata_key(value) -> list | int | str:
+    if isinstance(value, tuple):
+        return [_metadata_key(item) for item in value]
+    if isinstance(value, list):
+        return [_metadata_key(item) for item in value]
+    return value
 
 
 def _dedupe_forklifts(forklifts: List[Detection]) -> List[Detection]:

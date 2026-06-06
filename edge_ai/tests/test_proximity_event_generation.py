@@ -134,3 +134,169 @@ def test_analyzer_emits_from_risk_stage_not_raw_policy_level():
     assert events[0].metadata["proximity_stage_severity"] == "CRITICAL"
     assert events[0].metadata["case_type"] == "forklift_proximity"
     assert events[0].metadata["operational_case_key"]
+
+
+def _proximity_events_for_sequence(
+    frames,
+    *,
+    worker_track_id=None,
+    start_ts=100.0,
+    step=0.5,
+):
+    analyzer = ProximityAnalyzer()
+    aggregator = EventAggregator()
+    raw = []
+    emitted = []
+    for idx, worker_bbox in enumerate(frames):
+        ts = start_ts + idx * step
+        forklift = _det("forklift", (300, 70, 360, 135), track_id=101)
+        detections = [forklift]
+        tracked = []
+        if worker_bbox is not None:
+            worker = _det("person", worker_bbox, track_id=worker_track_id)
+            detections.insert(0, worker)
+            if worker_track_id is not None:
+                tracked = [worker]
+        frame_raw = analyzer.analyze(
+            detections,
+            tracked_pose_people=tracked,
+            camera_id="cam_01",
+            frame_number=idx + 1,
+            timestamp=ts,
+        )
+        raw.extend([event for event in frame_raw if event.event_type == "forklift_proximity"])
+        emitted.extend(aggregator.process(frame_raw, ts))
+    return raw, [event for event in emitted if event.event_type == "forklift_proximity"]
+
+
+def test_stable_worker_track_uses_same_operational_case():
+    raw, emitted = _proximity_events_for_sequence(
+        [
+            (390, 140, 420, 190),
+            (382, 140, 412, 190),
+            (375, 140, 405, 190),
+        ],
+        worker_track_id=7,
+    )
+
+    assert len(emitted) >= 1
+    assert len({tuple(event.metadata["operational_case_key"]) for event in raw}) == 1
+    assert emitted[0].metadata["worker_identity_source"] == "stable_track"
+
+
+def test_missing_worker_track_bbox_movement_keeps_same_surrogate_case():
+    raw, emitted = _proximity_events_for_sequence(
+        [
+            (392, 143, 416, 187),
+            (381, 142, 409, 189),
+            (362, 139, 391, 191),
+            (360, 139, 389, 191),
+        ],
+        worker_track_id=None,
+    )
+
+    assert len(emitted) >= 1
+    assert len({str(event.metadata["operational_case_key"]) for event in raw}) == 1
+    assert emitted[0].metadata["worker_identity_source"].startswith("surrogate_")
+    assert emitted[0].metadata["worker_track_id_valid"] is False
+    assert emitted[0].metadata["composite_eligible"] is False
+
+
+def test_missing_worker_track_detector_flicker_keeps_pending_case():
+    raw, emitted = _proximity_events_for_sequence(
+        [
+            (392, 143, 416, 187),
+            None,
+            (381, 142, 409, 189),
+            (362, 139, 391, 191),
+        ],
+        worker_track_id=None,
+        step=0.4,
+    )
+
+    assert len(raw) == 3
+    assert len(emitted) >= 1
+    assert len({str(event.metadata["operational_case_key"]) for event in raw}) == 1
+
+
+def test_missing_worker_track_short_occlusion_keeps_same_case():
+    raw, emitted = _proximity_events_for_sequence(
+        [
+            (392, 143, 416, 187),
+            (381, 142, 409, 189),
+            (362, 139, 391, 191),
+            None,
+            None,
+            (360, 139, 389, 191),
+        ],
+        worker_track_id=None,
+        step=0.5,
+    )
+
+    assert len(raw) == 4
+    assert len(emitted) >= 1
+    assert len({str(event.metadata["operational_case_key"]) for event in raw}) == 1
+
+
+def test_long_disappearance_resolves_active_proximity_case():
+    analyzer = ProximityAnalyzer()
+    aggregator = EventAggregator()
+    emitted = []
+    worker_bbox = (392, 143, 416, 187)
+    forklift = _det("forklift", (300, 70, 360, 135), track_id=101)
+
+    for idx, ts in enumerate([100.0, 100.5, 101.0]):
+        worker = _det("person", worker_bbox, track_id=None)
+        raw = analyzer.analyze(
+            [worker, forklift],
+            tracked_pose_people=[],
+            camera_id="cam_01",
+            frame_number=idx + 1,
+            timestamp=ts,
+        )
+        emitted.extend(aggregator.process(raw, ts))
+
+    assert any(event.metadata.get("event_lifecycle") == "created" for event in emitted)
+
+    emitted.extend(aggregator.process([], 107.0))
+
+    resolved = [
+        event for event in emitted
+        if event.event_type == "forklift_proximity"
+        and event.metadata.get("event_lifecycle") == "resolved"
+    ]
+    assert len(resolved) == 1
+
+
+def test_pending_proximity_promotes_when_persistence_satisfied_during_short_gap():
+    aggregator = EventAggregator()
+    base_metadata = {
+        "case_type": "forklift_proximity",
+        "operational_case_key": ["cam_01", 101, ["worker_surrogate", 1]],
+        "forklift_track_id": 101,
+        "worker_track_id": None,
+        "worker_track_id_valid": False,
+        "worker_track_id_fallback": True,
+        "proximity_alert_stage": "danger",
+        "risk_level": "danger",
+    }
+    event = HazardEvent(
+        event_type="forklift_proximity",
+        severity=Severity.HIGH,
+        camera_id="cam_01",
+        timestamp=100.0,
+        frame_number=1,
+        track_id=None,
+        bbox=(390, 140, 420, 190),
+        description="Forklift proximity danger",
+        metadata=base_metadata,
+    )
+
+    assert aggregator.process([event], 100.0) == []
+    assert aggregator.process([event], 100.55) == []
+    emitted = aggregator.process([], 101.0)
+
+    assert len(emitted) == 1
+    assert emitted[0].event_type == "forklift_proximity"
+    assert emitted[0].metadata["event_lifecycle"] == "created"
+    assert emitted[0].metadata["active_duration_sec"] == 1.0
