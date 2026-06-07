@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -48,10 +47,17 @@ class PersonFallState:
     area_history: deque = field(default_factory=lambda: deque(maxlen=FALL_VELOCITY_WINDOW))
     state: str = "normal"           # "normal" | "candidate" | "confirmed"
     candidate_since: float = 0.0
-    last_event_time: float = 0.0
+    last_event_time: float = float("-inf")
     last_seen: float = 0.0
     last_hip_ratio: Optional[float] = None
     has_pose_data: bool = False
+    track_first_seen: float = 0.0
+    candidate_event_emitted: bool = False
+    recovered_event_emitted: bool = False
+    trigger_reason: str = ""
+    last_velocity: Optional[float] = None
+    last_valid_keypoint_count: int = 0
+    last_bbox: Optional[Tuple[int, int, int, int]] = None
 
 
 # ─── Helper Functions ───────────────────────────────────────────────
@@ -82,6 +88,18 @@ def _euclidean(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _positive(value: float, fallback: float) -> float:
+    return value if value > 0 else fallback
+
+
+def _non_negative(value: float, fallback: float) -> float:
+    return value if value >= 0 else fallback
+
+
 # ════════════════════════════════════════════════════════════════════
 #  HazardAnalyzer
 # ════════════════════════════════════════════════════════════════════
@@ -95,6 +113,7 @@ class HazardAnalyzer:
         **kwargs,
     ) -> None:
         self.fall_enabled = fall_enabled
+        self._cfg = self._validated_config()
 
         # Fall state machines per track_id
         self._fall_states: Dict[int, PersonFallState] = {}
@@ -175,6 +194,199 @@ class HazardAnalyzer:
                 best_conf = conf
         return best_kps, best_conf
 
+    @staticmethod
+    def _validated_config() -> dict:
+        """Return fall thresholds with defensive bounds for runtime safety."""
+        return {
+            "aspect_ratio_threshold": _positive(FALL_ASPECT_RATIO_THRESHOLD, 0.90),
+            "hip_ratio_threshold": _clamp(FALL_HIP_RATIO_THRESHOLD, 0.0, 1.0),
+            "hip_recovery_threshold": _clamp(FALL_HIP_RECOVERY_THRESHOLD, 0.0, 1.0),
+            "velocity_threshold": _positive(FALL_VELOCITY_THRESHOLD, 15.0),
+            "candidate_timeout": _positive(FALL_CANDIDATE_TIMEOUT, 2.5),
+            "immobility_threshold": _non_negative(FALL_IMMOBILITY_THRESHOLD, 5.0),
+            # Retained for backwards-compatible tuning; currently observability-only.
+            "area_jitter_threshold": _non_negative(FALL_AREA_JITTER_THRESHOLD, 0.15),
+            "seated_guard_dy": _non_negative(FALL_SEATED_GUARD_DY, 6.0),
+            "seated_guard_ar_spread": _non_negative(FALL_SEATED_GUARD_AR_SPREAD, 0.10),
+            "cooldown_sec": _non_negative(FALL_COOLDOWN_SEC, 50.0),
+            "track_purge_sec": _positive(FALL_TRACK_PURGE_SEC, 5.0),
+        }
+
+    @staticmethod
+    def _valid_keypoint_count(kp_conf) -> int:
+        if kp_conf is None:
+            return 0
+        try:
+            return int(sum(1 for value in kp_conf if float(value) >= _KP_CONF_MIN))
+        except TypeError:
+            return 0
+
+    def _candidate_metadata(
+        self,
+        *,
+        st: PersonFallState,
+        timestamp: float,
+        aspect_ratio: float,
+        hip_ratio: Optional[float],
+        velocity: Optional[float],
+        movement: Optional[float] = None,
+        immobile: Optional[bool] = None,
+    ) -> dict:
+        elapsed = max(0.0, timestamp - st.candidate_since) if st.candidate_since else 0.0
+        metadata = {
+            "aspect_ratio": round(aspect_ratio, 2),
+            "duration_seconds": round(elapsed, 1),
+            "candidate_duration": round(elapsed, 3),
+            "pose_available": st.has_pose_data,
+            "valid_keypoint_count": st.last_valid_keypoint_count,
+            "track_age": round(max(0.0, timestamp - st.track_first_seen), 3) if st.track_first_seen else 0.0,
+            "centroid_history_length": len(st.centroid_history),
+            "trigger_reason": st.trigger_reason or "unknown",
+            "area_jitter_threshold": self._cfg["area_jitter_threshold"],
+        }
+        if hip_ratio is not None:
+            metadata["hip_ratio"] = round(float(hip_ratio), 3)
+        if velocity is not None:
+            metadata["velocity"] = round(float(velocity), 3)
+        if movement is not None:
+            metadata["movement_px"] = round(float(movement), 3)
+        if immobile is not None:
+            metadata["immobile"] = bool(immobile)
+        metadata["confidence"] = self._confidence_score(
+            aspect_ratio=aspect_ratio,
+            hip_ratio=hip_ratio,
+            velocity=velocity,
+            candidate_duration=elapsed,
+            pose_available=st.has_pose_data,
+            immobile=bool(immobile),
+        )
+        return metadata
+
+    def _confidence_score(
+        self,
+        *,
+        aspect_ratio: float,
+        hip_ratio: Optional[float],
+        velocity: Optional[float],
+        candidate_duration: float,
+        pose_available: bool,
+        immobile: bool,
+    ) -> float:
+        ar_signal = _clamp(
+            (aspect_ratio - self._cfg["aspect_ratio_threshold"]) / max(self._cfg["aspect_ratio_threshold"], 0.1),
+            0.0,
+            1.0,
+        )
+        hip_signal = 0.0
+        if hip_ratio is not None:
+            hip_signal = _clamp(
+                (self._cfg["hip_ratio_threshold"] - hip_ratio) / max(self._cfg["hip_ratio_threshold"], 0.05),
+                0.0,
+                1.0,
+            )
+        velocity_signal = 0.0
+        if velocity is not None:
+            velocity_signal = _clamp(
+                velocity / max(self._cfg["velocity_threshold"] * 2.0, 1.0),
+                0.0,
+                1.0,
+            )
+        duration_signal = _clamp(
+            candidate_duration / max(self._cfg["candidate_timeout"], 0.1),
+            0.0,
+            1.0,
+        )
+        pose_signal = 1.0 if pose_available else 0.45
+        immobility_signal = 1.0 if immobile else 0.35
+        score = (
+            0.25 * ar_signal
+            + 0.20 * hip_signal
+            + 0.15 * velocity_signal
+            + 0.20 * duration_signal
+            + 0.10 * pose_signal
+            + 0.10 * immobility_signal
+        )
+        return round(_clamp(score, 0.0, 1.0), 3)
+
+    def _state_transfer_candidate(
+        self,
+        tid: int,
+        person: Detection,
+        timestamp: float,
+    ) -> Optional[PersonFallState]:
+        """Transfer recent fall state across short high-overlap track fragmentation."""
+        best_tid = None
+        best_iou = 0.70
+        for old_tid, old_state in self._fall_states.items():
+            if old_tid == tid or old_state.last_bbox is None:
+                continue
+            if timestamp - old_state.last_seen > min(1.0, self._cfg["track_purge_sec"]):
+                continue
+            if old_state.state not in {"candidate", "confirmed"}:
+                continue
+            iou = _bbox_iou(person.bbox, old_state.last_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_tid = old_tid
+        if best_tid is None:
+            return None
+        st = self._fall_states.pop(best_tid)
+        logger.info(
+            "fall state transferred old_track=%s new_track=%s iou=%.2f state=%s",
+            best_tid,
+            tid,
+            best_iou,
+            st.state,
+        )
+        return st
+
+    def _make_event(
+        self,
+        *,
+        event_type: str,
+        severity: Severity,
+        camera_id: str,
+        timestamp: float,
+        frame_number: int,
+        track_id: int,
+        bbox: Tuple[int, int, int, int],
+        description: str,
+        metadata: dict,
+    ) -> HazardEvent:
+        return HazardEvent(
+            event_type=event_type,
+            severity=severity,
+            camera_id=camera_id,
+            timestamp=timestamp,
+            frame_number=frame_number,
+            track_id=track_id,
+            bbox=bbox,
+            description=description,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _mark_internal_lifecycle(metadata: dict) -> dict:
+        """Keep lifecycle events visible inside edge logs but out of alert routing."""
+        return {
+            **metadata,
+            "suppress_event": True,
+            "operational_alert": False,
+            "internal_lifecycle_event": True,
+        }
+
+    @staticmethod
+    def _log_lifecycle_event(event: HazardEvent) -> None:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        logger.info(
+            "fall lifecycle event event_type=%s camera_id=%s track_id=%s confidence=%s trigger_reason=%s",
+            event.event_type,
+            event.camera_id,
+            event.track_id,
+            metadata.get("confidence"),
+            metadata.get("trigger_reason"),
+        )
+
     # ── Fall Detection State Machine ────────────────────────────────
 
     def _fall_detection(
@@ -216,18 +428,24 @@ class HazardAnalyzer:
 
             # Get or create state
             if tid not in self._fall_states:
-                self._fall_states[tid] = PersonFallState()
+                self._fall_states[tid] = self._state_transfer_candidate(tid, person, timestamp) or PersonFallState()
             st = self._fall_states[tid]
+            if st.track_first_seen <= 0:
+                st.track_first_seen = timestamp
             st.last_seen = timestamp
             st.centroid_history.append(centroid)
             st.aspect_ratio_history.append(aspect_ratio)
             st.area_history.append(area)
+            st.last_bbox = person.bbox
             prev_hip_ratio = st.last_hip_ratio
 
             # ── Compute hip_ratio from pose keypoints ───────────────
             hip_ratio = None
+            valid_keypoint_count = 0
             if pose_entries:
                 kps, kp_conf = self._find_matching_keypoints(person.bbox, pose_entries)
+                valid_keypoint_count = self._valid_keypoint_count(kp_conf)
+                st.last_valid_keypoint_count = valid_keypoint_count
                 if (kps is not None and kp_conf is not None
                         and kp_conf[_KP_LEFT_HIP] >= _KP_CONF_MIN
                         and kp_conf[_KP_RIGHT_HIP] >= _KP_CONF_MIN):
@@ -239,6 +457,7 @@ class HazardAnalyzer:
             # ── State machine ───────────────────────────────────────
             if st.state == "normal":
                 triggered = False
+                trigger_reasons: list[str] = []
 
                 recent_ratios = list(st.aspect_ratio_history)[-5:]
                 ar_spread = (max(recent_ratios) - min(recent_ratios)) if len(recent_ratios) >= 2 else 1.0
@@ -249,21 +468,22 @@ class HazardAnalyzer:
                     else FALL_SEATED_GUARD_DY + 1.0
                 )
                 seated_like_low_posture = (
-                    aspect_ratio > FALL_ASPECT_RATIO_THRESHOLD
-                    and abs(dy_recent) <= FALL_SEATED_GUARD_DY
-                    and ar_spread <= FALL_SEATED_GUARD_AR_SPREAD
+                    aspect_ratio > self._cfg["aspect_ratio_threshold"]
+                    and abs(dy_recent) <= self._cfg["seated_guard_dy"]
+                    and ar_spread <= self._cfg["seated_guard_ar_spread"]
                 )
 
                 # Condition 1: aspect ratio (lowered from 1.0 to 0.85 per fd/ model)
                 if (len(st.aspect_ratio_history) >= 3
-                        and aspect_ratio > FALL_ASPECT_RATIO_THRESHOLD):
+                        and aspect_ratio > self._cfg["aspect_ratio_threshold"]):
                     prev_ratios = list(st.aspect_ratio_history)[:-1]
                     was_upright = any(r < 0.8 for r in prev_ratios[-3:])
                     if was_upright:
                         triggered = True
+                        trigger_reasons.append("aspect_ratio")
 
                 # Condition 2: hip_ratio from pose (NEW from fd/ project)
-                if hip_ratio is not None and hip_ratio < FALL_HIP_RATIO_THRESHOLD:
+                if hip_ratio is not None and hip_ratio < self._cfg["hip_ratio_threshold"]:
                     prev_ratios = list(st.aspect_ratio_history)[:-1]
                     was_upright = any(r < 0.8 for r in prev_ratios[-3:]) if len(prev_ratios) >= 2 else False
                     hip_drop_is_sudden = (
@@ -272,25 +492,52 @@ class HazardAnalyzer:
                     )
                     if (was_upright or hip_drop_is_sudden) and not seated_like_low_posture:
                         triggered = True
+                        trigger_reasons.append("hip_ratio")
 
                 # Condition 3: rapid downward velocity (kept as secondary)
+                velocity = None
                 if len(st.centroid_history) >= 2:
                     dy = st.centroid_history[-1][1] - st.centroid_history[0][1]
                     dt = len(st.centroid_history) - 1
                     velocity = dy / dt if dt > 0 else 0.0
-                    if velocity > FALL_VELOCITY_THRESHOLD and aspect_ratio > 0.8:
+                    st.last_velocity = velocity
+                    if velocity > self._cfg["velocity_threshold"] and aspect_ratio > 0.8:
                         triggered = True
+                        trigger_reasons.append("velocity")
 
                 if triggered:
                     st.state = "candidate"
                     st.candidate_since = timestamp
+                    st.candidate_event_emitted = True
+                    st.recovered_event_emitted = False
+                    st.trigger_reason = "+".join(trigger_reasons) if trigger_reasons else "unknown"
+                    metadata = self._candidate_metadata(
+                        st=st,
+                        timestamp=timestamp,
+                        aspect_ratio=aspect_ratio,
+                        hip_ratio=hip_ratio,
+                        velocity=st.last_velocity,
+                    )
+                    event = self._make_event(
+                        event_type="fall_candidate",
+                        severity=Severity.HIGH,
+                        camera_id=camera_id,
+                        timestamp=timestamp,
+                        frame_number=frame_number,
+                        track_id=tid,
+                        bbox=person.bbox,
+                        description=f"Fall candidate track={tid}",
+                        metadata=self._mark_internal_lifecycle(metadata),
+                    )
+                    self._log_lifecycle_event(event)
+                    events.append(event)
 
             elif st.state == "candidate":
                 # Recovery check
                 recovered = False
                 if hip_ratio is not None:
                     # Pose-based recovery (from fd/ project)
-                    if hip_ratio > FALL_HIP_RECOVERY_THRESHOLD:
+                    if hip_ratio > self._cfg["hip_recovery_threshold"]:
                         recovered = True
                 else:
                     # Bbox fallback recovery
@@ -298,32 +545,62 @@ class HazardAnalyzer:
                         recovered = True
 
                 if recovered:
+                    if not st.recovered_event_emitted:
+                        metadata = self._candidate_metadata(
+                            st=st,
+                            timestamp=timestamp,
+                            aspect_ratio=aspect_ratio,
+                            hip_ratio=hip_ratio,
+                            velocity=st.last_velocity,
+                        )
+                        metadata["recovered_from_state"] = "candidate"
+                        event = self._make_event(
+                            event_type="fall_recovered",
+                            severity=Severity.LOW,
+                            camera_id=camera_id,
+                            timestamp=timestamp,
+                            frame_number=frame_number,
+                            track_id=tid,
+                            bbox=person.bbox,
+                            description=f"Fall recovered track={tid}",
+                            metadata=self._mark_internal_lifecycle(metadata),
+                        )
+                        self._log_lifecycle_event(event)
+                        events.append(event)
+                        st.recovered_event_emitted = True
                     st.state = "normal"
+                    st.candidate_event_emitted = False
                     continue
 
                 # Confirmation: time-based (matching fd/ model's approach)
                 elapsed = timestamp - st.candidate_since
-                if elapsed >= FALL_CANDIDATE_TIMEOUT:
+                if elapsed >= self._cfg["candidate_timeout"]:
                     # When no pose data, add immobility check as extra safety
                     confirmed = True
+                    movement = None
+                    immobile = None
                     if not st.has_pose_data and len(st.centroid_history) >= 2:
                         c0 = st.centroid_history[0]
                         c1 = st.centroid_history[-1]
                         movement = _euclidean(c0, c1)
-                        if movement > FALL_IMMOBILITY_THRESHOLD:
+                        immobile = movement <= self._cfg["immobility_threshold"]
+                        if not immobile:
                             confirmed = False
 
                     if confirmed:
                         st.state = "confirmed"
-                        if timestamp - st.last_event_time >= FALL_COOLDOWN_SEC:
+                        if timestamp - st.last_event_time >= self._cfg["cooldown_sec"]:
                             st.last_event_time = timestamp
-                            metadata = {
-                                "aspect_ratio": round(aspect_ratio, 2),
-                                "duration_seconds": round(elapsed, 1),
-                            }
-                            if hip_ratio is not None:
-                                metadata["hip_ratio"] = round(hip_ratio, 3)
-                            events.append(HazardEvent(
+                            metadata = self._candidate_metadata(
+                                st=st,
+                                timestamp=timestamp,
+                                aspect_ratio=aspect_ratio,
+                                hip_ratio=hip_ratio,
+                                velocity=st.last_velocity,
+                                movement=movement,
+                                immobile=immobile,
+                            )
+                            events.append(self._make_event(
                                 event_type="fall_confirmed",
                                 severity=Severity.CRITICAL,
                                 camera_id=camera_id,
@@ -338,12 +615,36 @@ class HazardAnalyzer:
             elif st.state == "confirmed":
                 # Recovery from confirmed state
                 recovered = False
-                if hip_ratio is not None and hip_ratio > FALL_HIP_RECOVERY_THRESHOLD:
+                if hip_ratio is not None and hip_ratio > self._cfg["hip_recovery_threshold"]:
                     recovered = True
                 elif aspect_ratio < 0.8:
                     recovered = True
                 if recovered:
+                    if not st.recovered_event_emitted:
+                        metadata = self._candidate_metadata(
+                            st=st,
+                            timestamp=timestamp,
+                            aspect_ratio=aspect_ratio,
+                            hip_ratio=hip_ratio,
+                            velocity=st.last_velocity,
+                        )
+                        metadata["recovered_from_state"] = "confirmed"
+                        event = self._make_event(
+                            event_type="fall_recovered",
+                            severity=Severity.LOW,
+                            camera_id=camera_id,
+                            timestamp=timestamp,
+                            frame_number=frame_number,
+                            track_id=tid,
+                            bbox=person.bbox,
+                            description=f"Fall recovered track={tid}",
+                            metadata=self._mark_internal_lifecycle(metadata),
+                        )
+                        self._log_lifecycle_event(event)
+                        events.append(event)
+                        st.recovered_event_emitted = True
                     st.state = "normal"
+                    st.candidate_event_emitted = False
 
         return events
 
@@ -353,7 +654,7 @@ class HazardAnalyzer:
         """Remove fall states for track_ids absent for > FALL_TRACK_PURGE_SEC."""
         stale = [
             tid for tid, st in self._fall_states.items()
-            if now - st.last_seen > FALL_TRACK_PURGE_SEC
+            if now - st.last_seen > self._cfg["track_purge_sec"]
         ]
         for tid in stale:
             del self._fall_states[tid]

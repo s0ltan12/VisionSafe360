@@ -2,6 +2,7 @@
 import sys
 import time
 from pathlib import Path
+from queue import PriorityQueue
 from threading import Event
 
 _EDGE_AI_DIR = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ from src.alerts.alert_manager import AlertManager, AlertManagerConfig
 from src.integration.backend_client import DeliveryResult as BackendDeliveryResult
 from src.models.hazard_event import HazardEvent
 from src.models.severity import Severity
+from src.alerts.notification_service import DeliveryChannel
 
 
 class _BackendStub:
@@ -71,6 +73,23 @@ def _event(severity: Severity) -> HazardEvent:
 	)
 
 
+def _suppressed_fall_lifecycle_event() -> HazardEvent:
+	return HazardEvent(
+		event_type="fall_candidate",
+		severity=Severity.HIGH,
+		camera_id="cam_01",
+		timestamp=100.0,
+		frame_number=1,
+		track_id=1,
+		description="candidate",
+		metadata={
+			"suppress_event": True,
+			"internal_lifecycle_event": True,
+			"operational_alert": False,
+		},
+	)
+
+
 def _wait_until(predicate, timeout_sec: float = 1.0, interval_sec: float = 0.01) -> bool:
 	deadline = time.monotonic() + timeout_sec
 	while time.monotonic() < deadline:
@@ -101,6 +120,32 @@ def test_low_routes_to_backend_only() -> None:
 	assert fcm.calls == 0
 	assert siren.calls == 0
 	assert metrics["n_backend_ok"] == 1
+	assert metrics["n_fcm_ok"] == 0
+	assert metrics["n_siren_triggers"] == 0
+
+
+def test_suppressed_fall_lifecycle_event_routes_to_no_channels() -> None:
+	backend = _BackendStub(ok=True)
+	fcm = _FCMStub(ok=True)
+	siren = _SirenStub(ok=True)
+
+	manager = AlertManager(
+		backend_client=backend,
+		fcm_service=fcm,
+		siren_controller=siren,
+		config=AlertManagerConfig(
+			alerts_enabled=True,
+			medium_fcm_enabled=True,
+			async_delivery_enabled=False,
+		),
+	)
+
+	metrics = manager.process_events([_suppressed_fall_lifecycle_event()])
+
+	assert backend.calls == 0
+	assert fcm.calls == 0
+	assert siren.calls == 0
+	assert metrics["n_backend_ok"] == 0
 	assert metrics["n_fcm_ok"] == 0
 	assert metrics["n_siren_triggers"] == 0
 
@@ -287,3 +332,67 @@ def test_async_shutdown_stops_worker_gracefully() -> None:
 	assert _wait_until(lambda: backend.calls >= 1)
 	manager.shutdown(timeout_sec=1.0)
 	assert manager._worker is None or not manager._worker.is_alive()
+
+
+def test_priority_task_orders_critical_before_low() -> None:
+	manager = AlertManager(
+		backend_client=_BackendStub(ok=True),
+		config=AlertManagerConfig(async_delivery_enabled=False),
+	)
+	low = manager._prioritized_task(DeliveryChannel.BACKEND, _event(Severity.LOW))
+	critical = manager._prioritized_task(DeliveryChannel.BACKEND, _event(Severity.CRITICAL))
+
+	assert sorted([low, critical])[0].task.event.severity == Severity.CRITICAL
+
+
+def test_priority_task_preserves_fifo_within_same_severity() -> None:
+	manager = AlertManager(
+		backend_client=_BackendStub(ok=True),
+		config=AlertManagerConfig(async_delivery_enabled=False),
+	)
+	first_event = _event(Severity.HIGH)
+	second_event = _event(Severity.HIGH)
+	second_event.frame_number = 2
+
+	first = manager._prioritized_task(DeliveryChannel.BACKEND, first_event)
+	second = manager._prioritized_task(DeliveryChannel.BACKEND, second_event)
+
+	ordered = sorted([second, first])
+	assert [item.task.event.frame_number for item in ordered] == [1, 2]
+
+
+def test_full_priority_queue_evicts_low_for_critical() -> None:
+	manager = AlertManager(
+		backend_client=_BackendStub(ok=True),
+		config=AlertManagerConfig(async_delivery_enabled=False),
+	)
+	manager._queue = PriorityQueue(maxsize=1)
+
+	low = _event(Severity.LOW)
+	critical = _event(Severity.CRITICAL)
+	critical.frame_number = 99
+
+	queued_low, evicted_low = manager._enqueue_delivery_task(DeliveryChannel.BACKEND, low)
+	queued_critical, evicted_critical = manager._enqueue_delivery_task(DeliveryChannel.BACKEND, critical)
+
+	assert queued_low is True
+	assert evicted_low is None
+	assert queued_critical is True
+	assert evicted_critical is low
+	assert manager._queue.get_nowait().task.event is critical
+
+
+def test_full_priority_queue_does_not_evict_same_severity_fifo() -> None:
+	manager = AlertManager(
+		backend_client=_BackendStub(ok=True),
+		config=AlertManagerConfig(async_delivery_enabled=False),
+	)
+	manager._queue = PriorityQueue(maxsize=1)
+
+	first = _event(Severity.HIGH)
+	second = _event(Severity.HIGH)
+	second.frame_number = 2
+
+	assert manager._enqueue_delivery_task(DeliveryChannel.BACKEND, first) == (True, None)
+	assert manager._enqueue_delivery_task(DeliveryChannel.BACKEND, second) == (False, None)
+	assert manager._queue.get_nowait().task.event is first
