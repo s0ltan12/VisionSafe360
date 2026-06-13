@@ -3,10 +3,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Camera, Activity, Trash2, Edit2, CheckCircle2, X,
   Play, Square, Wifi, WifiOff, Link, Loader2, Radio, Map,
+  Upload, Video, Globe, FileVideo,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { CamerasAPI } from '../api';
-import { Camera as CameraType } from '../types';
+import { Camera as CameraType, CameraSourceType } from '../types';
 import CameraZoneManager from './CameraZoneManager';
 
 type StreamState = 'idle' | 'starting' | 'streaming' | 'stopping' | 'error';
@@ -26,6 +27,35 @@ const defaultCardState = (): CameraCardState => ({
   savingUrl: false,
   errorMsg: null,
 });
+
+const SOURCE_TYPE_STYLES: Record<CameraSourceType, { label: string; Icon: any; cls: string }> = {
+  rtsp:     { label: 'RTSP',     Icon: Wifi,      cls: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
+  mediamtx: { label: 'MEDIAMTX', Icon: Radio,     cls: 'text-purple-400 border-purple-500/30 bg-purple-500/10' },
+  file:     { label: 'FILE',     Icon: FileVideo, cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  webcam:   { label: 'WEBCAM',   Icon: Video,     cls: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+  webrtc:   { label: 'WEBRTC',   Icon: Globe,     cls: 'text-zinc-400 border-zinc-500/30 bg-zinc-500/10' },
+};
+
+const resolveSourceType = (cam: CameraType): CameraSourceType => {
+  if (cam.source_type) return cam.source_type;
+  const url = cam.stream_url || '';
+  if (url.startsWith('rtsp://')) return 'rtsp';
+  if (url && !url.includes('://') && !/^\d+$/.test(url)) return 'file';
+  if (/^\d+$/.test(url)) return 'webcam';
+  return 'rtsp';
+};
+
+const SourceTypeBadge: React.FC<{ cam: CameraType }> = ({ cam }) => {
+  if (!cam.stream_url && !cam.source_type) return null;
+  const style = SOURCE_TYPE_STYLES[resolveSourceType(cam)];
+  const Icon = style.Icon;
+  return (
+    <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded border font-mono ${style.cls}`}>
+      <Icon size={9} />
+      <span>{style.label}</span>
+    </span>
+  );
+};
 
 const CameraManagement = () => {
   const { t } = useLanguage();
@@ -61,37 +91,101 @@ const CameraManagement = () => {
 
   // ── Form state ─────────────────────────────────────────────────────
   const [formName, setFormName] = useState('');
-  const [formUrl, setFormUrl] = useState('');
-  const [formStreamUrl, setFormStreamUrl] = useState('');
   const [formAreaName, setFormAreaName] = useState('Factory Hall');
   const [formZoneName, setFormZoneName] = useState('Production Line A');
   const [formLocationDescription, setFormLocationDescription] = useState('');
+  const [sourceType, setSourceType] = useState<CameraSourceType>('rtsp');
+  const [formRtspUrl, setFormRtspUrl] = useState('');
+  const [formMediamtxPath, setFormMediamtxPath] = useState('');
+  const [formDeviceIndex, setFormDeviceIndex] = useState<number>(0);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const resetForm = () => {
+    setFormName('');
+    setFormAreaName('Factory Hall');
+    setFormZoneName('Production Line A');
+    setFormLocationDescription('');
+    setSourceType('rtsp');
+    setFormRtspUrl('');
+    setFormMediamtxPath('');
+    setFormDeviceIndex(0);
+    setUploadFile(null);
+    setUploadProgress(0);
+    setSubmitError(null);
+    setSubmitting(false);
+  };
+
+  const closeAddModal = () => {
+    setShowAddModal(false);
+    resetForm();
+  };
+
+  const canSubmit = (() => {
+    if (!formName.trim() || submitting) return false;
+    switch (sourceType) {
+      case 'rtsp':     return formRtspUrl.trim().startsWith('rtsp://');
+      case 'mediamtx': return /^[a-zA-Z0-9_\-]+$/.test(formMediamtxPath.trim());
+      case 'file':     return uploadFile !== null;
+      case 'webcam':   return formDeviceIndex >= 0;
+      case 'webrtc':   return false;
+    }
+    return false;
+  })();
 
   const handleAddCamera = async () => {
-    if (!formName.trim()) return;
-    const newCamera: CameraType = {
-      id: `CAM-${String(cameras.length + 1).padStart(2, '0')}`,
-      name: formName,
-      zone: `${formAreaName} / ${formZoneName}`,
-      areaName: formAreaName,
-      zoneName: formZoneName,
-      locationDescription: formLocationDescription || undefined,
-      url: formUrl || undefined,
-      stream_url: formStreamUrl || undefined,
-      status: 'Online',
-      isPrivacyMode: false,
-      thumbnail: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?q=80&w=800',
-      fps: 30,
-      health: 100,
-    };
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setSubmitError(null);
     try {
-      const created = await CamerasAPI.add(newCamera);
+      let created: CameraType;
+      if (sourceType === 'file' && uploadFile) {
+        created = await CamerasAPI.uploadAndCreate(
+          {
+            file: uploadFile,
+            name: formName,
+            areaName: formAreaName,
+            zoneName: formZoneName,
+            locationDescription: formLocationDescription || undefined,
+          },
+          setUploadProgress,
+        );
+      } else {
+        const next: CameraType = {
+          id: `CAM-${String(cameras.length + 1).padStart(2, '0')}`,
+          name: formName,
+          zone: `${formAreaName} / ${formZoneName}`,
+          areaName: formAreaName,
+          zoneName: formZoneName,
+          locationDescription: formLocationDescription || undefined,
+          source_type: sourceType,
+          status: 'Online',
+          isPrivacyMode: false,
+          thumbnail: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?q=80&w=800',
+          fps: 30,
+          health: 100,
+        };
+        if (sourceType === 'rtsp') {
+          next.stream_url = formRtspUrl.trim();
+        } else if (sourceType === 'mediamtx') {
+          const path = formMediamtxPath.trim();
+          next.mediamtxPath = path;
+          next.stream_url = `rtsp://mediamtx:8554/${path}`;
+        } else if (sourceType === 'webcam') {
+          next.deviceIndex = formDeviceIndex;
+          next.stream_url = String(formDeviceIndex);
+        }
+        created = await CamerasAPI.add(next);
+      }
       setCameras(prev => [...prev, created]);
       setCardStates(prev => ({ ...prev, [created.id]: defaultCardState() }));
-      setShowAddModal(false);
-      setFormName(''); setFormUrl(''); setFormStreamUrl(''); setFormAreaName('Factory Hall'); setFormZoneName('Production Line A'); setFormLocationDescription('');
-    } catch (e) {
-      console.error('Failed to add camera:', e);
+      closeAddModal();
+    } catch (e: any) {
+      setSubmitError(e?.message || 'Failed to add source');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -336,15 +430,7 @@ const CameraManagement = () => {
                   {/* Stream state badge (below controls) */}
                   <div className="flex items-center justify-between text-[10px] text-zinc-600">
                     {getStreamBadge(cs.streamState)}
-                    {cam.stream_url && (
-                      <span className="flex items-center gap-1">
-                        {cam.stream_url.startsWith('rtsp://') ? (
-                          <><Wifi size={9} className="text-zinc-500" /><span>RTSP</span></>
-                        ) : (
-                          <><WifiOff size={9} /><span>Unknown</span></>
-                        )}
-                      </span>
-                    )}
+                    <SourceTypeBadge cam={cam} />
                   </div>
                 </div>
               </div>
@@ -353,17 +439,56 @@ const CameraManagement = () => {
         </div>
       )}
 
-      {/* Add Camera Modal */}
+      {/* Add Source Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#0f0f11] border border-zinc-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="p-6 border-b border-zinc-800 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-white">{t('addCamera')}</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-zinc-500 hover:text-white">
+          <div className="bg-[#0f0f11] border border-zinc-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
+              <h3 className="text-lg font-bold text-white">{t('addSource')}</h3>
+              <button onClick={closeAddModal} className="text-zinc-500 hover:text-white">
                 <X size={24} />
               </button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-5 overflow-y-auto">
+              {/* Source type segmented control */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase">{t('sourceType')}</label>
+                <div className="grid grid-cols-5 gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
+                  {([
+                    { key: 'rtsp',     label: t('sourceTypeRtsp'),     Icon: Wifi },
+                    { key: 'mediamtx', label: t('sourceTypeMediaMtx'), Icon: Radio },
+                    { key: 'file',     label: t('sourceTypeFile'),     Icon: FileVideo },
+                    { key: 'webcam',   label: t('sourceTypeWebcam'),   Icon: Video },
+                    { key: 'webrtc',   label: t('sourceTypeWebRTC'),   Icon: Globe, disabled: true },
+                  ] as { key: CameraSourceType; label: string; Icon: any; disabled?: boolean }[]).map(opt => {
+                    const active = sourceType === opt.key && !opt.disabled;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        disabled={opt.disabled || submitting}
+                        title={opt.disabled ? t('webRTCComingSoon') : ''}
+                        onClick={() => !opt.disabled && setSourceType(opt.key)}
+                        className={`flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                          active
+                            ? 'bg-vs-orange/20 text-vs-orange border border-vs-orange/40'
+                            : opt.disabled
+                              ? 'text-zinc-700 cursor-not-allowed'
+                              : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent'
+                        }`}
+                      >
+                        <opt.Icon size={16} />
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {sourceType === 'webrtc' && (
+                  <p className="text-[10px] text-zinc-600">{t('webRTCComingSoon')}</p>
+                )}
+              </div>
+
+              {/* Name + Area/Zone (always shown) */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-zinc-500 uppercase">{t('cameraName')} *</label>
                 <input
@@ -372,27 +497,6 @@ const CameraManagement = () => {
                   onChange={e => setFormName(e.target.value)}
                   className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
                   placeholder="e.g. Loading Dock North"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">RTSP Stream URL (AI Detection)</label>
-                <input
-                  type="text"
-                  value={formStreamUrl}
-                  onChange={e => setFormStreamUrl(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none font-mono text-sm"
-                  placeholder="rtsp://192.168.1.100:554/ch0"
-                />
-                <p className="text-[10px] text-zinc-600">The RTSP URL the AI worker will connect to for live detection.</p>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase">{t('rtspUrl')} (Display)</label>
-                <input
-                  type="text"
-                  value={formUrl}
-                  onChange={e => setFormUrl(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none"
-                  placeholder="Optional display URL"
                 />
               </div>
               <div className="space-y-2">
@@ -413,7 +517,6 @@ const CameraManagement = () => {
                     placeholder="Production Line A"
                   />
                 </div>
-                <p className="text-[10px] text-zinc-600">Area and zone appear on alerts and camera cards.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-xs font-bold text-zinc-500 uppercase">Location Description</label>
@@ -425,15 +528,126 @@ const CameraManagement = () => {
                   placeholder="Mounted above conveyor entrance, facing worker lane"
                 />
               </div>
+
+              {/* Conditional per-type fields */}
+              {sourceType === 'rtsp' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                    <Wifi size={11} /> RTSP URL
+                  </label>
+                  <input
+                    type="text"
+                    value={formRtspUrl}
+                    onChange={e => setFormRtspUrl(e.target.value)}
+                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none font-mono text-sm"
+                    placeholder="rtsp://192.168.1.100:554/ch0"
+                  />
+                  <p className="text-[10px] text-zinc-600">The RTSP URL the AI worker will connect to for live detection.</p>
+                </div>
+              )}
+
+              {sourceType === 'mediamtx' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                    <Radio size={11} /> {t('mediamtxPath')}
+                  </label>
+                  <input
+                    type="text"
+                    value={formMediamtxPath}
+                    onChange={e => setFormMediamtxPath(e.target.value)}
+                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none font-mono text-sm"
+                    placeholder="cam_01"
+                  />
+                  <p className="text-[10px] text-zinc-600">{t('mediamtxPathHelp')}</p>
+                  <div className="text-[11px] font-mono text-zinc-500 bg-black/60 border border-zinc-900 rounded-md px-2 py-1.5">
+                    rtsp://mediamtx:8554/{formMediamtxPath || '<path>'}
+                  </div>
+                </div>
+              )}
+
+              {sourceType === 'file' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                    <FileVideo size={11} /> {t('uploadFile')}
+                  </label>
+                  <label className="flex flex-col items-center justify-center gap-2 py-6 bg-black border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-vs-orange/40 transition-colors">
+                    <input
+                      type="file"
+                      accept="video/mp4,video/avi,video/quicktime,video/x-matroska"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0] || null;
+                        setUploadFile(file);
+                        setUploadProgress(0);
+                      }}
+                      disabled={submitting}
+                    />
+                    <Upload size={22} className="text-zinc-600" />
+                    {uploadFile ? (
+                      <div className="text-center">
+                        <p className="text-sm font-mono text-white truncate max-w-xs">{uploadFile.name}</p>
+                        <p className="text-[10px] text-zinc-600">{(uploadFile.size / (1024 * 1024)).toFixed(1)} MB</p>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-sm text-zinc-400">{t('dropVideoHere')}</p>
+                        <p className="text-[10px] text-zinc-600">{t('videoFileTypes')}</p>
+                      </>
+                    )}
+                  </label>
+                  {submitting && uploadFile && (
+                    <div className="space-y-1">
+                      <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-vs-orange transition-[width] duration-150"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-zinc-500 text-end">{t('uploading')} · {uploadProgress}%</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {sourceType === 'webcam' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                    <Video size={11} /> {t('deviceIndex')}
+                  </label>
+                  <select
+                    value={formDeviceIndex}
+                    onChange={e => setFormDeviceIndex(Number(e.target.value))}
+                    className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-white focus:border-vs-orange outline-none font-mono text-sm"
+                  >
+                    {[0, 1, 2, 3].map(i => (
+                      <option key={i} value={i}>/dev/video{i} (index {i})</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-zinc-600">{t('deviceIndexHelp')}</p>
+                </div>
+              )}
+
+              {sourceType === 'webrtc' && (
+                <div className="rounded-lg border border-zinc-800 bg-black/40 p-4 text-center text-zinc-500">
+                  <Globe size={22} className="mx-auto mb-2 text-zinc-700" />
+                  <p className="text-sm">{t('webRTCComingSoon')}</p>
+                </div>
+              )}
+
+              {submitError && (
+                <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+                  {submitError}
+                </div>
+              )}
             </div>
-            <div className="p-6 bg-zinc-900/30 flex justify-end space-x-3 rtl:space-x-reverse">
-              <button onClick={() => setShowAddModal(false)} className="px-4 py-2 text-zinc-400 hover:text-white font-medium">{t('cancel')}</button>
+            <div className="p-6 bg-zinc-900/30 flex justify-end space-x-3 rtl:space-x-reverse shrink-0 border-t border-zinc-800">
+              <button onClick={closeAddModal} className="px-4 py-2 text-zinc-400 hover:text-white font-medium">{t('cancel')}</button>
               <button
-                disabled={!formName.trim()}
+                disabled={!canSubmit}
                 className="px-6 py-2 bg-vs-orange text-black font-bold rounded-lg shadow-glow hover:bg-vs-lightOrange transition-colors flex items-center space-x-2 rtl:space-x-reverse disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleAddCamera}
               >
-                <CheckCircle2 size={18} />
+                {submitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
                 <span>{t('saveChanges')}</span>
               </button>
             </div>

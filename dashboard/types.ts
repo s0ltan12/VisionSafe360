@@ -149,6 +149,8 @@ export interface NotificationRecord {
   createdAt: string;
 }
 
+export type CameraSourceType = 'rtsp' | 'mediamtx' | 'file' | 'webcam' | 'webrtc';
+
 export interface Camera {
   id: string;
   name: string;
@@ -161,7 +163,10 @@ export interface Camera {
   supportedAiCapabilities?: string[] | null;
   severityProfile?: string | null;
   url?: string;
-  stream_url?: string;  // RTSP/live stream source for AI detection
+  stream_url?: string;  // RTSP URL, filename, or webcam-index string
+  source_type?: CameraSourceType | null;
+  mediamtxPath?: string | null;
+  deviceIndex?: number | null;
   status: 'Online' | 'Offline';
   isPrivacyMode: boolean;
   thumbnail: string;
@@ -205,6 +210,8 @@ export interface DemoVideo {
   zone: string;
   description: string;
   streamUrl: string;
+  sourceType?: CameraSourceType;
+  cameraId?: string;
 }
 
 export interface JobStatus {

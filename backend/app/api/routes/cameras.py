@@ -1,15 +1,16 @@
 """Camera routes with stream control endpoints."""
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ...config.database import get_db
 from ...schemas import CameraCreate, CameraOut, CameraUpdate
 from ...services.camera_service import CameraService
 from ...services.job_service import job_service
+from ...utils.media import stream_upload_to_videos_dir
 from ...utils.permissions import require_roles
 
 router = APIRouter(
@@ -43,6 +44,42 @@ def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(g
 def delete_camera(camera_id: str, db: Session = Depends(get_db)):
     if not CameraService.delete(db, camera_id):
         raise HTTPException(status_code=404, detail="Camera not found")
+
+
+@router.post("/upload", response_model=CameraOut, status_code=201)
+async def upload_and_create_camera(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    zone: str = Form(...),
+    area_name: Optional[str] = Form(None),
+    zone_name: Optional[str] = Form(None),
+    location_description: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Upload a video file and register it as a Camera source in one shot.
+
+    Used by the unified "Add Source" modal when the user picks the
+    "Video File" source type. Avoids orphan files that would occur with
+    a two-step upload-then-create flow.
+    """
+    try:
+        safe_name = await stream_upload_to_videos_dir(file)
+    finally:
+        await file.close()
+
+    payload = CameraCreate(
+        name=name,
+        zone=zone,
+        area_name=area_name,
+        zone_name=zone_name,
+        location_description=location_description,
+        stream_url=safe_name,
+        source_type="file",
+        status="Online",
+        fps=0,
+        health=100,
+    )
+    return CameraService.create(db, payload)
 
 
 # ── Stream control endpoints ──────────────────────────────────────────

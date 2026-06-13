@@ -28,8 +28,26 @@ def seed() -> None:
             conn.execute(text(
                 "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS stream_url VARCHAR(512)"
             ))
+            conn.execute(text(
+                "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS source_type VARCHAR(16)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS mediamtx_path VARCHAR(128)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS device_index INTEGER"
+            ))
+            conn.execute(text(
+                "UPDATE cameras SET source_type = 'rtsp' "
+                "WHERE source_type IS NULL AND stream_url LIKE 'rtsp://%'"
+            ))
+            conn.execute(text(
+                "UPDATE cameras SET source_type = 'file' "
+                "WHERE source_type IS NULL AND stream_url IS NOT NULL "
+                "AND stream_url NOT LIKE '%://%'"
+            ))
             conn.commit()
-        print("[seed] Migration: stream_url column ensured on cameras table.")
+        print("[seed] Migration: source columns ensured on cameras table.")
     except Exception as exc:
         print(f"[seed] Migration warning (non-fatal): {exc}")
 
@@ -100,27 +118,48 @@ def seed() -> None:
                is_privacy_mode=False, thumbnail="https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=800",
                fps=30, health=98, location_description="Mounted above conveyor entrance, facing worker lane.",
                supported_ai_capabilities=["fall", "ppe", "proximity", "ergonomics"], severity_profile="production_line",
-               stream_url="rtsp://mediamtx:8554/cam_01"),
+               stream_url="rtsp://mediamtx:8554/cam_01", source_type="mediamtx", mediamtx_path="cam_01"),
         Camera(id="CAM-02", name="Warehouse Forklift Crossing", area_id="AREA-WAREHOUSE", area_name="Warehouse",
                zone_id="ZONE-FORKLIFT", zone_name="Forklift Crossing",
                zone="Warehouse / Forklift Crossing", status="Online",
                is_privacy_mode=False, thumbnail="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=800",
                fps=25, health=94, location_description="Covers forklift crossing at the warehouse entrance.",
                supported_ai_capabilities=["ppe", "proximity"], severity_profile="forklift_zone",
-               stream_url="rtsp://mediamtx:8554/cam_02"),
+               stream_url="rtsp://mediamtx:8554/cam_02", source_type="mediamtx", mediamtx_path="cam_02"),
         Camera(id="CAM-03", name="Loading Dock 04", area_id="AREA-LOADING", area_name="Loading Zone",
                zone_id="ZONE-DOCK", zone_name="Loading Dock",
                zone="Loading Zone / Loading Dock", status="Offline",
                is_privacy_mode=True, thumbnail="https://images.unsplash.com/photo-1503694978374-8a2fa686963a?q=80&w=800",
                fps=0, health=0, location_description="Dock camera facing pallet loading and truck bay.",
                supported_ai_capabilities=["fall", "ppe", "proximity"], severity_profile="loading_dock",
-               stream_url="rtsp://mediamtx:8554/cam_03"),
+               stream_url="rtsp://mediamtx:8554/cam_03", source_type="mediamtx", mediamtx_path="cam_03"),
         Camera(id="CAM-04", name="Welding Station PPE View", area_id="AREA-FACTORY", area_name="Factory Hall",
                zone_id="ZONE-WELDING", zone_name="Welding Station",
                zone="Factory Hall / Welding Station", status="Online",
                is_privacy_mode=False, thumbnail="https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?q=80&w=800",
                fps=24, health=91, location_description="PPE compliance view over the welding station.",
-               supported_ai_capabilities=["ppe", "ergonomics"], severity_profile="hot_work"),
+               supported_ai_capabilities=["ppe", "ergonomics"], severity_profile="hot_work",
+               source_type="rtsp"),
+        Camera(id="DEMO-V1", name="Demo Stream — v1", area_id="AREA-FACTORY", area_name="Demo Lab",
+               zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
+               is_privacy_mode=False, fps=0, health=100,
+               location_description="Demo file source seeded by backend.",
+               stream_url="v1.mp4", source_type="file"),
+        Camera(id="DEMO-V2", name="Demo Stream — v2", area_id="AREA-FACTORY", area_name="Demo Lab",
+               zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
+               is_privacy_mode=False, fps=0, health=100,
+               location_description="Demo file source seeded by backend.",
+               stream_url="v2.mp4", source_type="file"),
+        Camera(id="DEMO-V3", name="Demo Stream — v3", area_id="AREA-FACTORY", area_name="Demo Lab",
+               zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
+               is_privacy_mode=False, fps=0, health=100,
+               location_description="Demo file source seeded by backend.",
+               stream_url="v3.mp4", source_type="file"),
+        Camera(id="DEMO-V4", name="Demo Stream — v4", area_id="AREA-FACTORY", area_name="Demo Lab",
+               zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
+               is_privacy_mode=False, fps=0, health=100,
+               location_description="Demo file source seeded by backend.",
+               stream_url="v4.mp4", source_type="file"),
     ]
 
     incidents = [

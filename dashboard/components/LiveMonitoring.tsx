@@ -4,7 +4,6 @@ import {
 	CheckSquare,
 	Clock,
 	Cpu,
-	Edit2,
 	FastForward,
 	Grid,
 	Layers,
@@ -17,18 +16,15 @@ import {
 	Rewind,
 	ShieldCheck,
 	Square,
-	Trash2,
-	Upload,
 	Video,
 	Wifi,
 	WifiOff,
 	X,
 } from 'lucide-react';
 import {
-	DemoVideosAPI,
+	CamerasAPI,
 	IncidentsAPI,
 	JobsAPI,
-	UploadAPI,
 	WS_BASE_URL,
 	getAIStreamUrl,
 	getAuthToken,
@@ -227,33 +223,35 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	);
 };
 
+const SOURCE_TYPE_PILL: Record<string, { label: string; cls: string }> = {
+	rtsp:     { label: 'RTSP',     cls: 'border-sky-500/30 bg-sky-500/15 text-sky-300' },
+	mediamtx: { label: 'MEDIAMTX', cls: 'border-purple-500/30 bg-purple-500/15 text-purple-300' },
+	file:     { label: 'FILE',     cls: 'border-amber-500/30 bg-amber-500/15 text-amber-300' },
+	webcam:   { label: 'WEBCAM',   cls: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300' },
+	webrtc:   { label: 'WEBRTC',   cls: 'border-zinc-500/30 bg-zinc-500/15 text-zinc-300' },
+};
+
 const DemoVideoCard: React.FC<{
 	video: DemoVideo;
 	isActive: boolean;
 	onClick: () => void;
-	onEdit: () => void;
-	onDelete: () => void;
-	isDeleting: boolean;
-	isEditing: boolean;
 	isMultiSelect?: boolean;
 	isMultiSelected?: boolean;
-}> = ({ video, isActive, onClick, onEdit, onDelete, isDeleting, isEditing, isMultiSelect = false, isMultiSelected = false }) => {
+}> = ({ video, isActive, onClick, isMultiSelect = false, isMultiSelected = false }) => {
 	const { t } = useLanguage();
+	const pill = SOURCE_TYPE_PILL[video.sourceType || 'rtsp'] || SOURCE_TYPE_PILL.rtsp;
 	return (
 		<div
-			onClick={() => {
-				if (!isDeleting) onClick();
-			}}
+			onClick={onClick}
 			onKeyDown={(event) => {
 				if (event.key === 'Enter' || event.key === ' ') {
 					event.preventDefault();
-					if (!isDeleting) onClick();
+					onClick();
 				}
 			}}
 			role="button"
-			tabIndex={isDeleting ? -1 : 0}
+			tabIndex={0}
 			aria-pressed={isMultiSelect ? isMultiSelected : isActive}
-			aria-disabled={isDeleting}
 			className={`group relative min-h-32 overflow-hidden rounded-lg border text-start transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
 				isActive || isMultiSelected ? 'border-vs-orange shadow-[0_0_0_1px_rgba(249,115,22,0.45)]' : 'border-zinc-800 hover:border-zinc-700'
 			}`}
@@ -278,32 +276,9 @@ const DemoVideoCard: React.FC<{
 						{isMultiSelected ? <CheckSquare size={15} /> : <Square size={15} />}
 					</div>
 				)}
-				<button
-					type="button"
-					onClick={(event) => {
-						event.stopPropagation();
-						onEdit();
-					}}
-					disabled={isDeleting || isEditing}
-					className="absolute right-12 top-11 flex h-8 w-8 items-center justify-center rounded-md border border-vs-orange/25 bg-black/75 text-vs-orange opacity-100 transition-colors hover:border-vs-orange/60 hover:text-orange-200 disabled:cursor-wait disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
-					aria-label={`Edit ${video.name}`}
-					title={t('edit' as any)}
-				>
-					{isEditing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Edit2 size={14} aria-hidden="true" />}
-				</button>
-				<button
-					type="button"
-					onClick={(event) => {
-						event.stopPropagation();
-						onDelete();
-					}}
-					disabled={isDeleting || isEditing}
-					className="absolute right-3 top-11 flex h-8 w-8 items-center justify-center rounded-md border border-red-500/20 bg-black/75 text-red-300 opacity-100 transition-colors hover:border-red-400/50 hover:text-red-100 disabled:cursor-wait disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
-					aria-label={`Delete ${video.name}`}
-					title={t('delete' as any)}
-				>
-					{isDeleting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
-				</button>
+				<span className={`absolute right-3 top-11 rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider ${pill.cls}`}>
+					{pill.label}
+				</span>
 				<div>
 					<p className="truncate text-sm font-bold text-white">{video.name}</p>
 					<p className="mt-1 line-clamp-2 text-[10px] text-zinc-300">{video.description}</p>
@@ -377,12 +352,8 @@ const LiveMonitoring = () => {
 	const multiAiWsRefs = useRef<Record<string, WebSocket>>({});
 	const multiAiCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
 	const fullscreenMultiAiCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
-	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
-	const [uploadBusy, setUploadBusy] = useState(false);
 	const [isMaximized, setIsMaximized] = useState(false);
-	const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
-	const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
 	const [aiSessionActive, setAiSessionActive] = useState(false);
 	const [multiAiSessionActive, setMultiAiSessionActive] = useState(false);
 
@@ -423,10 +394,10 @@ const LiveMonitoring = () => {
 		});
 	}, []);
 
-	const loadVideos = useCallback(async (options: RequestInit = {}) => {
+	const loadVideos = useCallback(async (_options: RequestInit = {}) => {
 		setIsRefreshingVideos(true);
 		try {
-			const data = await DemoVideosAPI.getAll(options);
+			const data = await CamerasAPI.toSourceCards();
 			setVideos(data);
 			setSelectedVideoId((current) => {
 				if (current && data.some((video) => video.id === current)) return current;
@@ -633,22 +604,6 @@ const LiveMonitoring = () => {
 		player.currentTime = Math.max(0, Math.min(player.duration, player.currentTime + seconds));
 	};
 
-	const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-		const file = event.target.files?.[0];
-		if (!file) return;
-		setUploadBusy(true);
-		setJobError(null);
-		try {
-			await UploadAPI.uploadVideo(file);
-			await loadVideos();
-		} catch (err: any) {
-			setJobError(err?.message || 'Upload failed');
-		} finally {
-			setUploadBusy(false);
-			event.target.value = '';
-		}
-	};
-
 	const handleModeChange = useCallback((mode: ViewMode) => {
 		setViewMode(mode);
 		if (mode !== 'file') {
@@ -671,66 +626,11 @@ const LiveMonitoring = () => {
 		setAiSessionActive(false);
 		setAiState('stopped');
 		setSelectedVideoId(video.id);
+		// Live sources can't play through <video>; auto-switch to AI mode.
+		if (viewMode === 'file' && video.sourceType && video.sourceType !== 'file') {
+			setViewMode('ai');
+		}
 	}, [viewMode]);
-
-	const handleDeleteSource = useCallback(async (video: DemoVideo) => {
-		const confirmed = window.confirm(`Delete source "${video.name}"? This removes it from Available Sources.`);
-		if (!confirmed) return;
-		setDeletingSourceId(video.id);
-		setJobError(null);
-		try {
-			const wasSelected = selectedVideoId === video.id;
-			const wasMultiSelected = selectedMultiVideoIds.includes(video.id);
-			if (wasSelected || wasMultiSelected) {
-				videoPlayerRef.current?.pause();
-				setIsPlaying(false);
-				setIsMaximized(false);
-				if (wasSelected) setSelectedVideoId('');
-				if (wasMultiSelected) setSelectedMultiVideoIds((current) => current.filter((id) => id !== video.id));
-				if (jobStatus.running) {
-					await JobsAPI.stop();
-					await waitForJobIdle();
-				}
-				setAiSessionActive(false);
-				setMultiAiSessionActive(false);
-				setAiState('stopped');
-			}
-			await DemoVideosAPI.delete(video.fileName);
-			setVideos((current) => current.filter((item) => item.id !== video.id));
-		} catch (error: any) {
-			setJobError(error?.message ?? 'Failed to delete video source');
-		} finally {
-			setDeletingSourceId(null);
-		}
-	}, [jobStatus.running, selectedMultiVideoIds, selectedVideoId, waitForJobIdle]);
-
-	const handleEditSource = useCallback(async (video: DemoVideo) => {
-		const nextName = window.prompt('Rename source file', video.fileName);
-		if (!nextName || nextName === video.fileName) return;
-		setEditingSourceId(video.id);
-		setJobError(null);
-		try {
-			const wasSelected = selectedVideoId === video.id;
-			if (wasSelected) {
-				videoPlayerRef.current?.pause();
-				setIsPlaying(false);
-				setAiSessionActive(false);
-				setAiState('stopped');
-				if (jobStatus.running) {
-					await JobsAPI.stop();
-					await waitForJobIdle();
-				}
-			}
-			const updated = await DemoVideosAPI.rename(video.fileName, nextName);
-			setVideos((current) => current.map((item) => (item.id === video.id ? updated : item)));
-			if (wasSelected) setSelectedVideoId(updated.id);
-			setSelectedMultiVideoIds((current) => current.map((id) => (id === video.id ? updated.id : id)));
-		} catch (error: any) {
-			setJobError(error?.message ?? 'Failed to rename video source');
-		} finally {
-			setEditingSourceId(null);
-		}
-	}, [jobStatus.running, selectedVideoId, waitForJobIdle]);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -1000,9 +900,10 @@ const LiveMonitoring = () => {
 					? 'animate-pulse bg-vs-orange'
 					: 'bg-zinc-500';
 	const multiActive = (Object.values(multiAiStates) as MultiAiStreamState[]).some((stream) => ['starting', 'running', 'no_frames'].includes(stream.state));
+	const selectedIsFileSource = !selectedVideo?.sourceType || selectedVideo.sourceType === 'file';
 	const canStart = !jobBusy && (
 		viewMode === 'file'
-			? Boolean(selectedVideo) && !isPlaying
+			? Boolean(selectedVideo) && selectedIsFileSource && !isPlaying
 			: viewMode === 'multi_ai'
 				? selectedMultiVideos.length > 0 && !multiAiSessionActive && !multiActive
 				: Boolean(selectedVideo) && !jobStatus.running
@@ -1036,22 +937,6 @@ const LiveMonitoring = () => {
 					</div>
 
 					<div className="flex flex-wrap items-center gap-3">
-						<input
-							type="file"
-							ref={fileInputRef}
-							onChange={handleFileUpload}
-							className="hidden"
-							accept="video/mp4,video/avi,video/quicktime,video/x-matroska"
-						/>
-						<button
-							type="button"
-							onClick={() => fileInputRef.current?.click()}
-							disabled={uploadBusy}
-							className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs font-bold uppercase tracking-wide text-zinc-300 transition-colors hover:border-vs-orange/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange"
-						>
-							{uploadBusy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Upload size={14} aria-hidden="true" />}
-							{t('uploadVideo' as any)}
-						</button>
 						<div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-[#0f0f11] p-1" aria-label="Source grid density">
 							<button type="button" onClick={() => setLayout(4)} className={layoutButtonClass(layout === 4)} aria-pressed={layout === 4} title="Comfortable grid">
 								<Grid size={18} aria-hidden="true" />
@@ -1273,10 +1158,6 @@ const LiveMonitoring = () => {
 											video={video}
 											isActive={video.id === selectedVideo?.id}
 											onClick={() => handleSelectVideo(video)}
-											onEdit={() => handleEditSource(video)}
-											onDelete={() => handleDeleteSource(video)}
-											isDeleting={deletingSourceId === video.id}
-											isEditing={editingSourceId === video.id}
 											isMultiSelect={viewMode === 'multi_ai'}
 											isMultiSelected={selectedMultiVideoIds.includes(video.id)}
 										/>

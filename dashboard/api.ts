@@ -10,6 +10,7 @@ import {
   AnalyticsStats,
   AnalyticsTimeSeriesPoint,
   Camera,
+  CameraSourceType,
   DemoVideo,
   ErgonomicRecord,
   ErgonomicStats,
@@ -130,6 +131,9 @@ function toFrontendCamera(c: any): Camera {
     severityProfile: c.severity_profile ?? c.severityProfile ?? null,
     url:           c.url,
     stream_url:    c.stream_url,
+    source_type:   c.source_type ?? c.sourceType ?? null,
+    mediamtxPath:  c.mediamtx_path ?? c.mediamtxPath ?? null,
+    deviceIndex:   c.device_index ?? c.deviceIndex ?? null,
     status:        c.status,
     isPrivacyMode: c.is_privacy_mode,
     thumbnail:     c.thumbnail,
@@ -690,11 +694,68 @@ export const CamerasAPI = {
       body.severity_profile = camera.severityProfile;
       delete body.severityProfile;
     }
+    if (camera.mediamtxPath !== undefined) {
+      body.mediamtx_path = camera.mediamtxPath;
+      delete body.mediamtxPath;
+    }
+    if (camera.deviceIndex !== undefined) {
+      body.device_index = camera.deviceIndex;
+      delete body.deviceIndex;
+    }
     const data = await request<any>('/api/cameras', {
       method: 'POST',
       body: JSON.stringify(body),
     });
     return toFrontendCamera(data);
+  },
+
+  uploadAndCreate: (
+    fields: {
+      file: File;
+      name: string;
+      areaName: string;
+      zoneName: string;
+      locationDescription?: string;
+    },
+    onProgress?: (percent: number) => void,
+  ): Promise<Camera> => {
+    return new Promise((resolve, reject) => {
+      const token = getToken();
+      const fd = new FormData();
+      fd.append('file', fields.file);
+      fd.append('name', fields.name);
+      fd.append('zone', `${fields.areaName} / ${fields.zoneName}`);
+      fd.append('area_name', fields.areaName);
+      fd.append('zone_name', fields.zoneName);
+      if (fields.locationDescription) fd.append('location_description', fields.locationDescription);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${BASE_URL}/api/cameras/upload`);
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (onProgress && e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(toFrontendCamera(JSON.parse(xhr.responseText)));
+          } catch (err) {
+            reject(err);
+          }
+        } else {
+          let detail = `Upload failed: HTTP ${xhr.status}`;
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            if (parsed?.detail) detail = parsed.detail;
+          } catch { /* ignore */ }
+          reject(new Error(detail));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(fd);
+    });
   },
 
   update: async (id: string, changes: Partial<Camera>): Promise<Camera> => {
@@ -731,11 +792,48 @@ export const CamerasAPI = {
       body.severity_profile = changes.severityProfile;
       delete body.severityProfile;
     }
+    if (changes.mediamtxPath !== undefined) {
+      body.mediamtx_path = changes.mediamtxPath;
+      delete body.mediamtxPath;
+    }
+    if (changes.deviceIndex !== undefined) {
+      body.device_index = changes.deviceIndex;
+      delete body.deviceIndex;
+    }
     const data = await request<any>(`/api/cameras/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
     return toFrontendCamera(data);
+  },
+
+  /**
+   * Returns cameras mapped into the DemoVideo-shaped contract that
+   * LiveMonitoring consumes for its source grid. For file sources the
+   * streamUrl is the HTTP video endpoint with auth token; for live
+   * sources it falls back to the WS AI stream URL.
+   */
+  toSourceCards: async (): Promise<DemoVideo[]> => {
+    const cameras = await CamerasAPI.getAll();
+    return cameras.map((cam): DemoVideo => {
+      const sourceType: CameraSourceType =
+        (cam.source_type as CameraSourceType) ?? 'rtsp';
+      const isFile = sourceType === 'file';
+      const streamUrl = isFile && cam.stream_url
+        ? appendAuthToken(`/api/media/videos/${cam.stream_url}`)
+        : getAIStreamUrl(cam.id);
+      return {
+        id: cam.id,
+        cameraId: cam.id,
+        name: cam.name,
+        fileName: cam.stream_url || '',
+        zone: cam.zone || cam.zoneName || '',
+        description: cam.locationDescription || '',
+        streamUrl,
+        sourceType,
+        type: sourceType === 'file' ? 'upload' : undefined,
+      };
+    });
   },
 
   delete: (id: string) =>
