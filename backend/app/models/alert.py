@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from sqlalchemy import (
-    Column, DateTime, Enum as PgEnum, Float, Index, JSON, String, Text,
+    Column, DateTime, Enum as PgEnum, Float, ForeignKey, Index, Integer, JSON, String, Text,
 )
+from sqlalchemy.orm import relationship
 
 from ..config.database import Base
 from .enums import HazardTypeEnum, SeverityEnum, StatusEnum
@@ -22,9 +23,11 @@ class Alert(Base):
         Index("ix_alerts_worker_id", "worker_id"),
         Index("ix_alerts_status", "status"),
         Index("ix_alerts_occurred_at", "occurred_at"),
+        Index("ix_alerts_incident_id", "incident_id"),
     )
 
     id          = Column(String, primary_key=True, index=True)
+    incident_id = Column(String, ForeignKey("incidents.id"), nullable=True)
     type        = Column(PgEnum(HazardTypeEnum, name="hazardtype", create_type=False), nullable=False)
     severity    = Column(PgEnum(SeverityEnum,   name="severity",   create_type=False), nullable=False)
     zone        = Column(String, nullable=False)
@@ -50,6 +53,13 @@ class Alert(Base):
     )
     description = Column(Text, nullable=False)
     thumbnail   = Column(String, nullable=True)
+    event_frame = Column(Text, nullable=True)
+    video_evidence = Column(Text, nullable=True)
+    track_id = Column(Integer, nullable=True)
+    frame_number = Column(Integer, nullable=True)
+    frame_width = Column(Integer, nullable=True)
+    frame_height = Column(Integer, nullable=True)
+    evidence_kind = Column(String, nullable=True)
     confidence  = Column(Float, nullable=True)
     acknowledged_by = Column(String, nullable=True)
     acknowledged_by_id = Column(String, nullable=True)
@@ -64,6 +74,8 @@ class Alert(Base):
     false_positive_by_id = Column(String, nullable=True)
     false_positive_at = Column(DateTime(timezone=True), nullable=True)
     created_at  = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    incident = relationship("Incident", back_populates="alerts")
 
 
 class AlertEvent(Base):

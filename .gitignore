@@ -84,6 +84,7 @@ coverage/
 wandb/
 mlruns/
 tensorboard_logs/
+storage/
 
 # =========================
 # Media, Logs & Databases
@@ -118,3 +119,4 @@ output/
 *.jpeg
 docs/
 doc_ai/
+.gstack/

@@ -23,10 +23,21 @@ class StatusEnum(str, enum.Enum):
     Active = "Active"
 
 
+class IncidentStatusEnum(str, enum.Enum):
+    New = "New"
+    Validating = "Validating"
+    Active = "Active"
+    Acknowledged = "Acknowledged"
+    Resolved = "Resolved"
+    False_Positive = "False Positive"
+    Archived = "Archived"
+
+
 class HazardTypeEnum(str, enum.Enum):
     PPE = "PPE"
     Fall = "Fall"
     Proximity = "Proximity"
+    Overspeed = "Overspeed"
     Ergonomics = "Ergonomics"
     Intrusion = "Intrusion"
 

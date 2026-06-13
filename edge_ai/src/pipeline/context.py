@@ -22,6 +22,7 @@ from ..analysis.event_aggregator import EventAggregator
 from ..analysis.calibration import CalibrationManager
 from ..analysis.track_quality import TrackQualityMonitor
 from ..alerts.alert_manager import AlertManager
+from ..alerts.frame_ring_buffer import FrameRingBuffer
 from ..alerts.siren_controller import SirenController
 from ..integration.backend_client import BackendClient
 from ..utils.logger import MetricsLogger
@@ -54,6 +55,7 @@ class PipelineContext:
     worker_id: Optional[str]
     worker_gpu_id: Optional[str]
     alert_manager: AlertManager
+    frame_ring_buffer: Optional[FrameRingBuffer]
     siren_controller: SirenController
 
     renderer: SafetyOverlayRenderer

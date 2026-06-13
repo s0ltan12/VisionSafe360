@@ -6,6 +6,7 @@ caller and failed payloads are persisted in SQLite for later resend.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from enum import Enum
 import sqlite3
@@ -37,6 +38,7 @@ class BackendClientConfig:
     enabled: bool = settings.BACKEND_EVENTS_ENABLED
     base_url: str = settings.BACKEND_URL
     incidents_path: str = settings.BACKEND_INCIDENTS_PATH
+    safety_zones_path_template: str = settings.BACKEND_SAFETY_ZONES_PATH_TEMPLATE
     auth_token: str = settings.BACKEND_AUTH_TOKEN
     source_id: str = settings.BACKEND_SOURCE_ID
     camera_name: str = settings.BACKEND_CAMERA_NAME
@@ -70,6 +72,25 @@ class BackendClient:
 
         self._db_ready = False
         self._init_db()
+
+    def fetch_safety_zones(self, camera_id: str) -> dict:
+        """Fetch enabled camera safety zones for this edge worker."""
+        path = self.config.safety_zones_path_template.format(camera_id=camera_id)
+        url = self._join_url(self.config.base_url, path)
+        headers = {"Content-Type": "application/json"}
+        if self.config.auth_token:
+            headers["Authorization"] = f"Bearer {self.config.auth_token}"
+        try:
+            response = self._session.get(url, timeout=self.config.timeout_sec, headers=headers)
+            if 200 <= response.status_code < 300:
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {"zones": []}
+            logger.warning("safety zone config fetch failed: http_%s", response.status_code)
+        except requests.RequestException as exc:
+            logger.warning("safety zone config fetch failed: %s", exc)
+        except Exception as exc:
+            logger.warning("safety zone config parse failed: %s", exc)
+        return {"zones": []}
 
     @staticmethod
     def _join_url(base: str, path: str) -> str:
@@ -416,7 +437,7 @@ class BackendClient:
     def _event_to_payload(event: HazardEvent) -> dict:
         # Convert HazardEvent to backend IncidentCreate schema.
         severity_map = {
-            "CRITICAL": "High",
+            "CRITICAL": "Critical",
             "HIGH": "High",
             "MEDIUM": "Medium",
             "LOW": "Low",
@@ -433,8 +454,22 @@ class BackendClient:
                 or zone
             )
 
-        track_part = f"T{event.track_id}" if event.track_id is not None else "TNA"
-        incident_id = f"INC-{int(event.timestamp)}-{event.frame_number}-{track_part}"
+        event_metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
+        event_metadata.setdefault("event_type", event.event_type)
+        event_metadata.setdefault("track_id", event.track_id)
+        correlation_id = event_metadata.get("correlation_id")
+        if correlation_id:
+            digest = hashlib.sha1(str(correlation_id).encode("utf-8")).hexdigest()[:16]
+            incident_id = f"INC-COMP-{digest}"
+        elif event_metadata.get("operational_case_id") and (
+            event_metadata.get("case_type") == "forklift_proximity"
+            or str(event.event_type).lower() == "forklift_proximity"
+        ):
+            digest = hashlib.sha1(str(event_metadata["operational_case_id"]).encode("utf-8")).hexdigest()[:16]
+            incident_id = f"INC-PROX-{digest}"
+        else:
+            track_part = f"T{event.track_id}" if event.track_id is not None else "TNA"
+            incident_id = f"INC-{int(event.timestamp)}-{event.frame_number}-{track_part}"
         camera_name = getattr(event, "camera_name", None) or settings.BACKEND_CAMERA_NAME or None
         worker_id = getattr(event, "worker_id", None) or settings.BACKEND_WORKER_ID or None
         worker_gpu_id = getattr(event, "worker_gpu_id", None) or settings.BACKEND_WORKER_GPU_ID or None
@@ -453,8 +488,8 @@ class BackendClient:
             "corrective_action": "Investigate and acknowledge incident",
             "created_at": time.strftime("%Y-%m-%d", time.localtime(event.timestamp)),
         }
-        if isinstance(event.metadata, dict):
-            payload["metadata"] = BackendClient._to_json_safe(event.metadata)
+        if event_metadata:
+            payload["metadata"] = BackendClient._to_json_safe(event_metadata)
         return BackendClient._to_json_safe(payload)
 
     @staticmethod

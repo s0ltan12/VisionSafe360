@@ -130,6 +130,30 @@ class DetectionsLayer:
                     if sev_val > prev:
                         _worker_sev[tid] = sev_val
 
+        forklift_speeds: Dict[int, float] = {}
+        forklift_speed_boxes: list[tuple[tuple[int, int, int, int], float]] = []
+        if hazard_events:
+            for ev in hazard_events:
+                meta = getattr(ev, "metadata", None) or {}
+                forklift_tid = meta.get("forklift_track_id")
+                speed = meta.get("forklift_speed_mps")
+                if speed is None:
+                    speed = meta.get("speed_mps")
+                if forklift_tid is not None and speed is not None:
+                    try:
+                        forklift_speeds[int(forklift_tid)] = float(speed)
+                    except (TypeError, ValueError):
+                        continue
+                forklift_bbox = meta.get("forklift_bbox")
+                if speed is not None and _valid_bbox(forklift_bbox):
+                    try:
+                        forklift_speed_boxes.append((
+                            tuple(int(v) for v in forklift_bbox),
+                            float(speed),
+                        ))
+                    except (TypeError, ValueError):
+                        continue
+
         for det in detections:
             # Keep the scene readable: PPE micro-objects are displayed in worker
             # panels, not as on-frame dashed boxes.
@@ -172,7 +196,51 @@ class DetectionsLayer:
                 parts.append(f"D{display_id}")
             if cfg.show_confidence:
                 parts.append(f"{det.confidence:.2f}")
+            if det.class_name == "forklift":
+                speed = (
+                    forklift_speeds.get(int(det.track_id))
+                    if det.track_id is not None
+                    else None
+                )
+                if speed is None:
+                    speed = _speed_for_bbox(det.bbox, forklift_speed_boxes)
+                if speed is not None:
+                    parts.append(f"{speed:.1f}m/s")
             label = "  ".join(parts)
 
             _put_label_bar(frame, x1, y1, label, t.bg_panel, t.fg_primary,
                            t.font, scale, t.thick_thin)
+
+
+def _valid_bbox(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(isinstance(v, (int, float)) for v in value)
+    )
+
+
+def _speed_for_bbox(
+    bbox: tuple[int, int, int, int],
+    speed_boxes: list[tuple[tuple[int, int, int, int], float]],
+) -> float | None:
+    best_speed = None
+    best_iou = 0.2
+    for speed_bbox, speed in speed_boxes:
+        iou = _iou(bbox, speed_bbox)
+        if iou > best_iou:
+            best_iou = iou
+            best_speed = speed
+    return best_speed
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    x1 = max(a[0], b[0])
+    y1 = max(a[1], b[1])
+    x2 = min(a[2], b[2])
+    y2 = min(a[3], b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    area_a = max(0, a[2] - a[0]) * max(0, a[3] - a[1])
+    area_b = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0

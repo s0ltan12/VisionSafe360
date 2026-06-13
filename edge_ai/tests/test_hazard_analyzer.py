@@ -10,7 +10,9 @@ Tests:
 """
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 # Ensure src is importable
@@ -30,6 +32,60 @@ def _person(x1, y1, x2, y2, track_id=1, conf=0.9):
         class_id=0, class_name="person", confidence=conf,
         bbox=(x1, y1, x2, y2), track_id=track_id,
     )
+
+
+class _ArrayWrap:
+    def __init__(self, value):
+        self._value = np.array(value)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._value
+
+
+def _pose_results(bbox, left_hip_y, right_hip_y, hip_conf=0.95, extra_conf=0.6):
+    kps = np.zeros((1, 17, 2), dtype=float)
+    conf = np.full((1, 17), extra_conf, dtype=float)
+    kps[0, 11] = [bbox[0] + 20, left_hip_y]
+    kps[0, 12] = [bbox[2] - 20, right_hip_y]
+    conf[0, 11] = hip_conf
+    conf[0, 12] = hip_conf
+    return SimpleNamespace(
+        keypoints=SimpleNamespace(xy=_ArrayWrap(kps), conf=_ArrayWrap(conf)),
+        boxes=SimpleNamespace(xyxy=_ArrayWrap([bbox])),
+    )
+
+
+def _build_upright_history(ha, track_id, t0=1000.0, n=5):
+    for i in range(n):
+        ha.analyze(
+            [_person(100, 100, 150, 400, track_id=track_id)],
+            camera_id="cam_01",
+            frame_number=i,
+            timestamp=t0 + i * 0.066,
+        )
+
+
+def _enter_and_confirm_fall(ha, track_id, t0, start_frame=10):
+    ha.analyze(
+        [_person(80, 300, 280, 380, track_id=track_id)],
+        "cam_01",
+        start_frame,
+        t0,
+    )
+    confirmed = []
+    for i in range(1, 50):
+        confirmed.extend(ha.analyze(
+            [_person(80, 300, 280, 380, track_id=track_id)],
+            "cam_01",
+            start_frame + i,
+            t0 + i * 0.066,
+        ))
+        if any(e.event_type == "fall_confirmed" for e in confirmed):
+            break
+    return confirmed
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -136,6 +192,151 @@ class TestFallDetection:
             ppe_this_frame=True, proximity_this_frame=True,
         )
         assert events == []
+
+    def test_aspect_ratio_trigger_emits_candidate_once(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=60)
+
+        first = ha.analyze(
+            [_person(80, 300, 280, 380, track_id=60)],
+            camera_id="cam_01",
+            frame_number=10,
+            timestamp=1001.0,
+        )
+        second = ha.analyze(
+            [_person(80, 300, 280, 380, track_id=60)],
+            camera_id="cam_01",
+            frame_number=11,
+            timestamp=1001.1,
+        )
+
+        candidates = [e for e in first + second if e.event_type == "fall_candidate"]
+        assert len(candidates) == 1
+        assert "aspect_ratio" in candidates[0].metadata["trigger_reason"]
+        assert candidates[0].metadata["pose_available"] is False
+        assert candidates[0].metadata["suppress_event"] is True
+        assert candidates[0].metadata["operational_alert"] is False
+        assert candidates[0].metadata["internal_lifecycle_event"] is True
+
+    def test_hip_ratio_trigger_with_metadata(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=61, t0=1100.0)
+        bbox = (100, 100, 180, 300)  # ar=0.4, hip trigger only
+
+        events = ha.analyze(
+            [_person(*bbox, track_id=61)],
+            camera_id="cam_01",
+            frame_number=20,
+            timestamp=1101.0,
+            pose_results=_pose_results(bbox, left_hip_y=285, right_hip_y=285),
+        )
+
+        candidate = [e for e in events if e.event_type == "fall_candidate"][0]
+        assert candidate.metadata["trigger_reason"] == "hip_ratio"
+        assert candidate.metadata["pose_available"] is True
+        assert candidate.metadata["valid_keypoint_count"] == 17
+        assert candidate.metadata["hip_ratio"] == 0.075
+
+    def test_velocity_trigger(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        t0 = 1200.0
+        boxes = [
+            (100, 100, 200, 220),
+            (100, 125, 200, 245),
+        ]
+        events = []
+        for i, bbox in enumerate(boxes):
+            events.extend(ha.analyze(
+                [_person(*bbox, track_id=62)],
+                camera_id="cam_01",
+                frame_number=i,
+                timestamp=t0 + i * 0.066,
+            ))
+
+        candidate = [e for e in events if e.event_type == "fall_candidate"][0]
+        assert candidate.metadata["trigger_reason"] == "velocity"
+        assert candidate.metadata["velocity"] > 15.0
+
+    def test_confirmed_event_includes_confidence_and_debug_metadata(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=63, t0=1300.0)
+        events = _enter_and_confirm_fall(ha, track_id=63, t0=1301.0)
+
+        confirmed = [e for e in events if e.event_type == "fall_confirmed"][0]
+        metadata = confirmed.metadata
+        assert 0.0 <= metadata["confidence"] <= 1.0
+        assert "aspect_ratio" in metadata["trigger_reason"]
+        assert metadata["candidate_duration"] >= 2.5
+        assert metadata["track_age"] > 0
+        assert metadata["centroid_history_length"] >= 2
+        assert metadata["immobile"] is True
+
+    def test_confirmed_cooldown_enforced_for_same_track(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=64, t0=1400.0)
+        first = _enter_and_confirm_fall(ha, track_id=64, t0=1401.0)
+        second = ha.analyze([_person(80, 300, 280, 380, track_id=64)], "cam_01", 61, 1404.0)
+
+        assert len([e for e in first if e.event_type == "fall_confirmed"]) == 1
+        assert [e for e in second if e.event_type == "fall_confirmed"] == []
+
+    def test_first_confirmed_event_not_suppressed_at_low_timestamp(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=640, t0=0.0)
+
+        events = _enter_and_confirm_fall(ha, track_id=640, t0=0.5)
+
+        assert len([e for e in events if e.event_type == "fall_confirmed"]) == 1
+
+    def test_candidate_recovery_emits_fall_recovered(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=65, t0=1500.0)
+        ha.analyze([_person(80, 300, 280, 380, track_id=65)], "cam_01", 10, 1501.0)
+
+        events = ha.analyze(
+            [_person(100, 100, 150, 400, track_id=65)],
+            camera_id="cam_01",
+            frame_number=11,
+            timestamp=1501.1,
+        )
+
+        recovered = [e for e in events if e.event_type == "fall_recovered"][0]
+        assert recovered.metadata["recovered_from_state"] == "candidate"
+        assert recovered.metadata["suppress_event"] is True
+        assert ha._fall_states[65].state == "normal"
+
+    def test_confirmed_recovery_emits_fall_recovered(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=66, t0=1600.0)
+        _enter_and_confirm_fall(ha, track_id=66, t0=1601.0)
+
+        events = ha.analyze(
+            [_person(100, 100, 150, 400, track_id=66)],
+            camera_id="cam_01",
+            frame_number=61,
+            timestamp=1603.7,
+        )
+
+        recovered = [e for e in events if e.event_type == "fall_recovered"][0]
+        assert recovered.metadata["recovered_from_state"] == "confirmed"
+        assert recovered.metadata["suppress_event"] is True
+        assert ha._fall_states[66].state == "normal"
+
+    def test_track_continuity_transfers_candidate_after_short_fragmentation(self):
+        ha = HazardAnalyzer(fall_enabled=True)
+        _build_upright_history(ha, track_id=67, t0=1700.0)
+        ha.analyze([_person(80, 300, 280, 380, track_id=67)], "cam_01", 10, 1701.0)
+
+        events = ha.analyze(
+            [_person(82, 302, 282, 382, track_id=99)],
+            camera_id="cam_01",
+            frame_number=11,
+            timestamp=1701.2,
+        )
+
+        assert 67 not in ha._fall_states
+        assert ha._fall_states[99].state == "candidate"
+        assert [e for e in events if e.event_type == "fall_candidate"] == []
 
 
 if __name__ == "__main__":

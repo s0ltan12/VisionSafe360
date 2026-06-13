@@ -116,10 +116,10 @@ const UserManagement = () => {
         <table className="w-full text-start text-sm text-zinc-400">
           <thead className="bg-zinc-900/50 text-zinc-500 uppercase text-xs font-semibold border-b border-zinc-800">
             <tr>
-              <th className="px-6 py-4 text-start">User</th>
-              <th className="px-6 py-4 text-start">Role</th>
+              <th className="px-6 py-4 text-start">{t('user')}</th>
+              <th className="px-6 py-4 text-start">{t('role')}</th>
               <th className="px-6 py-4 text-start">{t('status')}</th>
-              <th className="px-6 py-4 text-start">Last Active</th>
+              <th className="px-6 py-4 text-start">{t('lastActive')}</th>
               <th className="px-6 py-4 text-end">{t('action')}</th>
             </tr>
           </thead>
@@ -160,7 +160,7 @@ const UserManagement = () => {
                     {t(user.status.toLowerCase() as any)}
                   </button>
                 </td>
-                <td className="px-6 py-4 text-zinc-500 font-mono text-xs">
+                <td className="px-6 py-4 text-zinc-500 font-mono text-xs" dir="ltr">
                   2 hours ago
                 </td>
                 <td className="px-6 py-4 text-end">

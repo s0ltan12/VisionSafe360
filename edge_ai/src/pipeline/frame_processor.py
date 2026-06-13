@@ -15,7 +15,12 @@ from ..config.settings import (
     BACKEND_EVENTS_ENABLED,
     OFFLINE_FLUSH_INTERVAL_SEC,
     OFFLINE_FLUSH_MAX_PER_CYCLE,
+    SAFETY_ZONES_ENABLED,
+    SAFETY_ZONES_REFRESH_INTERVAL_SEC,
 )
+from ..analysis.composite_hazard_engine import CompositeHazardEngine
+from ..analysis.safety_zone_engine import SafetyZoneEngine
+from ..analysis.zone_config_loader import ZoneConfigLoader
 from .context import PipelineContext, FrameResult
 
 logger = logging.getLogger("PipelineOrchestrator")
@@ -26,6 +31,10 @@ class FrameProcessor:
 
     def __init__(self, ctx: PipelineContext) -> None:
         self._ctx = ctx
+        self._composite_hazard_engine = CompositeHazardEngine()
+        self._zone_config_loader = ZoneConfigLoader()
+        self._safety_zone_engine = SafetyZoneEngine()
+        self._last_safety_zone_refresh: dict[str, float] = {}
 
     def process(self, bundle) -> FrameResult:
         ctx = self._ctx
@@ -56,6 +65,7 @@ class FrameProcessor:
         raw_prox_detections: list[Any] = []
         raw_forklift_dets = 0
         forklift_dets = 0
+        ts_now = time.time()
 
         if ctx.proximity_analyzer is not None:
             if ctx.frame_counter % ctx.proximity_every_n == 0:
@@ -65,14 +75,23 @@ class FrameProcessor:
             raw_forklift_dets = sum(
                 1 for d in raw_prox_detections if d.class_name == "forklift"
             )
+            prox_detections = ctx.proximity_analyzer.prepare_detections(
+                prox_detections,
+                ts_now,
+            )
             forklift_dets = sum(1 for d in prox_detections if d.class_name == "forklift")
             ctx.cumulative_forklift_dets += forklift_dets
 
             if forklift_dets > 0 and len(ctx.sample_forklift_lines) < 8:
+                forklift_ids = [
+                    d.track_id for d in prox_detections
+                    if d.class_name == "forklift"
+                ]
                 ctx.sample_forklift_lines.append(
                     (
                         f"frame={bundle.frame_number} forklift_dets={forklift_dets} "
-                        f"raw_forklift_dets={raw_forklift_dets}"
+                        f"raw_forklift_dets={raw_forklift_dets} "
+                        f"forklift_ids={forklift_ids}"
                     )
                 )
 
@@ -92,8 +111,19 @@ class FrameProcessor:
         track_metrics = ctx.track_monitor.update(detections, time.time())
         display_id_map = ctx.track_monitor.remap_detections_display_ids(detections)
 
-        ts_now = time.time()
         hazard_events: list[Any] = []
+
+        if SAFETY_ZONES_ENABLED:
+            self._refresh_safety_zones(ctx.stream.camera_id, ts_now)
+            hazard_events.extend(
+                self._safety_zone_engine.analyze(
+                    detections,
+                    camera_id=ctx.stream.camera_id,
+                    frame_number=bundle.frame_number,
+                    timestamp=ts_now,
+                    frame_shape=getattr(bundle.frame, "shape", None),
+                )
+            )
 
         if ctx.hazard_analyzer is not None:
             hazard_events = ctx.hazard_analyzer.analyze(
@@ -111,6 +141,23 @@ class FrameProcessor:
                 ctx.proximity_analyzer.analyze(
                     prox_detections,
                     tracked_pose_people,
+                    camera_id=ctx.stream.camera_id,
+                    frame_number=bundle.frame_number,
+                    timestamp=ts_now,
+                    detections_are_prepared=True,
+                )
+            )
+            hazard_events.extend(
+                ctx.proximity_analyzer.forklift_telemetry_events(
+                    prox_detections,
+                    camera_id=ctx.stream.camera_id,
+                    frame_number=bundle.frame_number,
+                    timestamp=ts_now,
+                )
+            )
+            hazard_events.extend(
+                ctx.proximity_analyzer.distance_telemetry_events(
+                    prox_detections,
                     camera_id=ctx.stream.camera_id,
                     frame_number=bundle.frame_number,
                     timestamp=ts_now,
@@ -152,7 +199,19 @@ class FrameProcessor:
                         sample.worker_gpu_id = ctx.worker_gpu_id
                     ctx.backend_client.submit_ergonomic_sample_fast(sample)
 
-        emitted_events = ctx.event_aggregator.process(hazard_events, ts_now)
+        hazard_events = self._zone_config_loader.enrich_events(hazard_events)
+        composite_events = self._composite_hazard_engine.process(hazard_events, ts_now)
+        if composite_events:
+            hazard_events = self._composite_hazard_engine.suppress_source_events(
+                hazard_events,
+                composite_events,
+            )
+        aggregation_input_events = hazard_events + composite_events
+        emitted_events = ctx.event_aggregator.process(aggregation_input_events, ts_now)
+        safety_overlay_events = _safety_overlay_events(
+            emitted_events,
+            aggregation_input_events,
+        )
         for event in emitted_events:
             if not getattr(event, "camera_name", None) and ctx.camera_name:
                 event.camera_name = ctx.camera_name
@@ -178,7 +237,7 @@ class FrameProcessor:
             annotated,
             detections=render_detections,
             pose_results=pose_results,
-            hazard_events=emitted_events,
+            hazard_events=safety_overlay_events,
             display_id_map=display_id_map,
             calibrated=ctx.is_calibrated,
             fps=ctx.inference_fps,
@@ -186,15 +245,20 @@ class FrameProcessor:
             n_det=len(detections),
             n_tracked=n_tracked,
             vram_mb=ctx.engine.vram_used_mb(),
-            n_hazards=len(emitted_events),
+            n_hazards=len(safety_overlay_events),
             pose_ms=0.0,
             track_coverage=track_metrics.get("track_coverage", 0.0),
             ppe_capable=ctx.ppe_capable,
             now=ts_now,
         )
 
+        if ctx.frame_ring_buffer is not None:
+            ctx.frame_ring_buffer.push(annotated, timestamp=ts_now)
+
         if ALERTS_ENABLED:
-            delivery_metrics = ctx.alert_manager.process_events(emitted_events, frame=annotated)
+            delivery_metrics = ctx.alert_manager.process_events(
+                emitted_events, frame=annotated, ring_buffer=ctx.frame_ring_buffer
+            )
 
         if (
             BACKEND_EVENTS_ENABLED
@@ -283,8 +347,7 @@ class FrameProcessor:
                 event.track_id,
             )
             if (
-                event.event_type
-                in {"forklift_proximity_warning", "forklift_proximity_danger"}
+                event.event_type.startswith("forklift_proximity_")
                 and len(ctx.sample_hazard_lines) < 8
             ):
                 ctx.sample_hazard_lines.append(
@@ -299,3 +362,79 @@ class FrameProcessor:
             ctx.frame_publisher.publish(annotated)
 
         return FrameResult(annotated=annotated)
+
+    def _refresh_safety_zones(self, camera_id: str, timestamp: float) -> None:
+        last = self._last_safety_zone_refresh.get(camera_id, 0.0)
+        if timestamp - last < SAFETY_ZONES_REFRESH_INTERVAL_SEC:
+            return
+        self._last_safety_zone_refresh[camera_id] = timestamp
+        payload = self._ctx.backend_client.fetch_safety_zones(camera_id)
+        zones = payload.get("zones") if isinstance(payload, dict) else []
+        self._safety_zone_engine.set_camera_zones(camera_id, zones or [])
+
+
+def _safety_overlay_events(emitted_events: list[Any], raw_events: list[Any]) -> list[Any]:
+    """Merge emitted alerts with live forklift-only overlay telemetry.
+
+    The delivery path must remain governed by EventAggregator, but the video UI
+    needs per-frame forklift distance and speed telemetry.  Limit raw overlay
+    passthrough to forklift proximity/overspeed so PPE/fall hazards still obey
+    persistence before appearing as alerts.
+    """
+    merged = list(emitted_events)
+    existing = {_overlay_key(event) for event in merged}
+    for event in raw_events:
+        if not _is_live_forklift_overlay_event(event):
+            continue
+        key = _overlay_key(event)
+        if key in existing:
+            continue
+        merged.append(event)
+        existing.add(key)
+    return merged
+
+
+def _is_live_forklift_overlay_event(event: Any) -> bool:
+    event_type = str(getattr(event, "event_type", "")).lower()
+    return event_type in {
+        "forklift_proximity",
+        "forklift_overspeed",
+        "forklift_telemetry",
+        "forklift_distance_telemetry",
+    }
+
+
+def _overlay_key(event: Any) -> tuple:
+    metadata = getattr(event, "metadata", None) or {}
+    event_type = str(getattr(event, "event_type", "")).lower()
+    if event_type == "forklift_overspeed":
+        return (
+            getattr(event, "camera_id", None),
+            event_type,
+            metadata.get("forklift_track_id", getattr(event, "track_id", None)),
+        )
+    if event_type == "forklift_telemetry":
+        return (
+            getattr(event, "camera_id", None),
+            event_type,
+            metadata.get("forklift_track_id", getattr(event, "track_id", None)),
+        )
+    if event_type == "forklift_distance_telemetry":
+        return (
+            getattr(event, "camera_id", None),
+            event_type,
+            metadata.get("forklift_track_id"),
+            metadata.get("worker_track_id", getattr(event, "track_id", None)),
+        )
+    if event_type == "forklift_proximity":
+        return (
+            getattr(event, "camera_id", None),
+            event_type,
+            metadata.get("forklift_track_id"),
+            metadata.get("worker_track_id", getattr(event, "track_id", None)),
+        )
+    return (
+        getattr(event, "camera_id", None),
+        event_type,
+        getattr(event, "track_id", None),
+    )

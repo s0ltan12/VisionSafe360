@@ -15,6 +15,11 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
+from ...utils.media import (
+    VIDEOS_DIR as _VIDEOS_DIR,
+    sanitize_video_filename as _sanitize_video_filename,
+    stream_upload_to_videos_dir,
+)
 from ...utils.permissions import require_roles
 
 router = APIRouter(
@@ -23,8 +28,6 @@ router = APIRouter(
     dependencies=[Depends(require_roles("admin", "operator", "viewer"))],  # SECURITY: was unauthenticated
 )
 
-_VIDEOS_DIR = Path(__file__).resolve().parents[3] / "edge_ai" / "vids_test"
-_MAX_UPLOAD_BYTES = int(os.getenv("MEDIA_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024)))
 _CHUNK_SIZE = 1024 * 1024
 _PREVIEW_JPEG_QUALITY = int(os.getenv("MEDIA_PREVIEW_JPEG_QUALITY", "92"))
 
@@ -86,15 +89,6 @@ def _annotate_ai_results(frame: Any, detections: list[dict[str, Any]]) -> None:
         }.get(item["severity"], _COLOR_NORMAL)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
         _draw_label(frame, item["label"], x, y, color)
-
-
-def _sanitize_video_filename(filename: str) -> str:
-    safe_name = "".join(c for c in Path(filename).name if c.isalnum() or c in "._- ").strip()
-    if not safe_name:
-        raise HTTPException(status_code=400, detail="Empty filename")
-    if not safe_name.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-        raise HTTPException(status_code=400, detail="Only video files (.mp4, .avi, .mov, .mkv) are allowed")
-    return safe_name
 
 
 def _build_video_entry(path: Path) -> dict[str, str]:
@@ -280,32 +274,12 @@ def video_feed(video_name: str):
 async def upload_video(file: UploadFile = File(...)):
     """Upload a video file for AI processing.
 
-    Accepts multipart form data with a 'file' field containing a video.
-    Saves to edge_ai/vids_test/ and returns the video metadata.
+    Kept for backward compatibility. New code should use
+    POST /api/cameras/upload which both stores the file and registers
+    it as a Camera in one shot.
     """
-    safe_name = _sanitize_video_filename(file.filename or "")
-
-    _VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = _VIDEOS_DIR / safe_name
-    tmp_dest = dest.with_suffix(dest.suffix + ".part")
-
-    total = 0
     try:
-        with open(tmp_dest, "wb") as output:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > _MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="Video file is too large")
-                output.write(chunk)
-        tmp_dest.replace(dest)
-    except Exception:
-        if tmp_dest.exists():
-            tmp_dest.unlink(missing_ok=True)
-        raise
+        safe_name = await stream_upload_to_videos_dir(file)
     finally:
         await file.close()
-
-    return _build_video_entry(dest)
+    return _build_video_entry(_VIDEOS_DIR / safe_name)

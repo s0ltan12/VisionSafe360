@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class CameraBase(BaseModel):
@@ -15,6 +16,9 @@ class CameraBase(BaseModel):
     zone_name: Optional[str] = None
     url: Optional[str] = None
     stream_url: Optional[str] = None  # RTSP/stream source for AI detection
+    source_type: Optional[str] = "rtsp"  # rtsp | mediamtx | file | webcam | webrtc
+    mediamtx_path: Optional[str] = None
+    device_index: Optional[int] = None
     location_description: Optional[str] = None
     supported_ai_capabilities: Optional[list[str]] = None
     severity_profile: Optional[str] = None
@@ -25,8 +29,19 @@ class CameraBase(BaseModel):
     health: Optional[float] = None
 
 
+def _new_camera_id() -> str:
+    return f"CAM-{uuid4().hex[:6].upper()}"
+
+
 class CameraCreate(CameraBase):
-    id: str
+    id: str = Field(default_factory=_new_camera_id)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_blank_id(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return _new_camera_id()
+        return value
 
 
 class CameraUpdate(BaseModel):
@@ -38,6 +53,9 @@ class CameraUpdate(BaseModel):
     zone_name: Optional[str] = None
     url: Optional[str] = None
     stream_url: Optional[str] = None  # RTSP/stream source for AI detection
+    source_type: Optional[str] = None
+    mediamtx_path: Optional[str] = None
+    device_index: Optional[int] = None
     location_description: Optional[str] = None
     supported_ai_capabilities: Optional[list[str]] = None
     severity_profile: Optional[str] = None

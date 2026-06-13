@@ -61,7 +61,6 @@ const KPICard = ({
       aria-label={`${title}: ${value}${trendValue ? ` ${trendValue}` : ''}`}
       aria-live="polite"
     >
-      <div className={`absolute -right-6 -top-6 w-24 h-24 rounded-full ${styles.bg} blur-2xl opacity-20 group-hover:opacity-30 transition-opacity`} aria-hidden="true"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
         <div className={`p-2 rounded-md ${styles.bg} border ${styles.border}`}>
           <Icon className={styles.text} size={20} aria-hidden="true" />
@@ -87,9 +86,20 @@ const KPICard = ({
   );
 };
 
+const formatDuration = (seconds?: number | null) => {
+  if (!seconds || seconds < 0) return '0m';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+};
+
 
 const SeverityBadge = ({ severity }: { severity: Severity }) => {
   const styles = {
+    Critical: 'bg-red-500/10 text-red-400 border-red-500/20',
     High: 'bg-red-500/10 text-red-500 border-red-500/20',
     Medium: 'bg-vs-orange/10 text-vs-orange border-vs-orange/20',
     Low: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
@@ -177,39 +187,37 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
     fetchDashboardData();
   }, [fetchDashboardData]);
 
-  const zones = [
-    { name: t('zoneA'), image: 'https://images.unsplash.com/photo-1565034946487-0d7150a275ce?q=80&w=2070', risk: 'High' },
-    { name: t('zoneB'), image: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=2070', risk: 'Medium' },
-    { name: t('zoneC'), image: 'https://images.unsplash.com/photo-1590105577767-e21a46b53002?q=80&w=2070', risk: 'High' }
-  ];
+  const dangerousZones = Array.isArray(stats?.top_dangerous_zones) ? stats.top_dangerous_zones : [];
+  const recurringHazards = Array.isArray(stats?.recurring_hazards) ? stats.recurring_hazards : [];
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-y-auto">
-      <div className="flex justify-between items-end">
-        <div>
+    <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden bg-[#050505] p-4 sm:p-6 space-y-5 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
           <h2 className="text-2xl font-bold text-white">{t('safetyOverview')}</h2>
           <p className="text-sm text-zinc-500">{t('realTimeMonitoring')}</p>
         </div>
-        <div className="flex space-x-2">
-           <span className="px-3 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-400 flex items-center">
+        <div className="flex shrink-0 space-x-2">
+           <span className="inline-flex items-center self-start rounded border border-zinc-800 bg-zinc-900 px-3 py-1 text-xs text-zinc-400">
              <Clock size={12} className="me-2" aria-hidden="true" /> {t('lastUpdated')}: 10:45 AM
            </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <KPICard title={t('activeAlerts')} value={stats?.active_alerts?.toString() || '0'} icon={AlertTriangle} trend="up" trendValue="+2" colorBase="red" />
         <KPICard title={t('incidents')} value={stats?.total_incidents?.toString() || '0'} icon={Activity} colorBase="orange" />
         <KPICard title={t('resolvedAlerts')} value={stats?.resolved_alerts?.toString() || '0'} icon={ShieldCheck} trend="up" trendValue="+15%" colorBase="emerald" />
         <KPICard title={t('camerasOnline')} value={`${stats?.online_cameras || 0}/${stats?.total_cameras || 0}`} icon={Camera} colorBase="blue" />
+        <KPICard title={t('avgResolution')} value={formatDuration(stats?.avg_resolution_time_seconds)} icon={Timer} colorBase="purple" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-[#0f0f11] rounded-lg border border-zinc-800 p-6 flex flex-col">
+      <div className="grid min-w-0 grid-cols-1 items-stretch gap-6 xl:grid-cols-3">
+        <div className="min-w-0 xl:col-span-2 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6 flex flex-col">
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-base text-white">{t('incidentTrends')}</h3>
           </div>
-          <div className="flex-1 min-h-[300px]">
+          <div className="h-[280px] min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} aria-label="7-day incident trends chart">
                 <defs>
@@ -228,37 +236,37 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
           </div>
         </div>
 
-        <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 p-6 flex flex-col">
-           <h3 className="font-bold text-base text-white mb-4">{t('criticalZones')}</h3>
-           <div className="space-y-4">
-              {zones.map((zone, i) => (
+        <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6 flex flex-col">
+           <h3 className="font-bold text-base text-white mb-4">{t('topDangerousZones')}</h3>
+           <div className="space-y-3">
+              {(dangerousZones.length ? dangerousZones : [
+                { zone: t('zoneA'), incident_count: 0, risk_score: 0 },
+                { zone: t('zoneB'), incident_count: 0, risk_score: 0 },
+                { zone: t('zoneC'), incident_count: 0, risk_score: 0 },
+              ]).map((zone: any, i: number) => (
                 <div 
                   key={i} 
-                  className="flex items-center space-x-3 rtl:space-x-reverse p-3 bg-zinc-900/50 rounded border border-zinc-800 hover:border-vs-orange/30 transition-colors group cursor-pointer"
+                  className="flex min-w-0 items-center space-x-3 rtl:space-x-reverse p-3 bg-zinc-900/50 rounded border border-zinc-800 hover:border-vs-orange/30 transition-colors group cursor-pointer"
                   role="button"
                   tabIndex={0}
-                  aria-label={`${zone.name} zone with ${zone.risk} risk level`}
-                  onClick={() => alert(`Redirecting to live feed for ${zone.name}`)}
+                  aria-label={`${zone.zone} zone with ${zone.incident_count ?? 0} incidents`}
+                  onClick={() => alert(`Redirecting to live feed for ${zone.zone}`)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      alert(`Redirecting to live feed for ${zone.name}`);
+                      alert(`Redirecting to live feed for ${zone.zone}`);
                     }
                   }}
                 >
-                   <div className="w-16 h-12 bg-black rounded overflow-hidden relative">
-                      <img 
-                        src={zone.image} 
-                        className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
-                        alt={`Zone ${zone.name} overview image`}
-                      />
+                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded border border-zinc-800 bg-[#050505] font-mono text-sm font-bold text-vs-orange">
+                      {i + 1}
                    </div>
-                   <div className="flex-1">
-                      <p className="text-sm font-medium text-zinc-200 group-hover:text-vs-orange transition-colors">{zone.name}</p>
-                      <p className="text-xs text-zinc-500">Active Sensors</p>
+                   <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-zinc-200 group-hover:text-vs-orange transition-colors">{zone.zone}</p>
+                      <p className="text-xs text-zinc-500">{zone.incident_count ?? 0} incidents</p>
                    </div>
-                   <div className={`text-[10px] font-bold px-2 py-0.5 rounded border ${zone.risk === 'High' ? 'text-red-500 bg-red-500/10 border-red-500/20' : 'text-vs-orange bg-vs-orange/10 border-vs-orange/20'}`}>
-                      {zone.risk}
+                   <div className="shrink-0 rounded border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-400">
+                      {zone.risk_score ?? 0}
                    </div>
                 </div>
               ))}
@@ -274,12 +282,48 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
         </div>
       </div>
 
-      <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 flex flex-col overflow-hidden">
+      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6">
+          <h3 className="font-bold text-base text-white mb-4">{t('recurringHazards')}</h3>
+          <div className="space-y-3">
+            {(recurringHazards.length ? recurringHazards : [{ zone: t('noRecurringHazards'), classification: t('clear'), count: 0 }]).map((hazard: any, index: number) => (
+              <div key={`${hazard.zone}-${hazard.classification}-${index}`} className="flex items-center justify-between gap-3 rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-zinc-200">{hazard.classification}</p>
+                  <p className="truncate text-xs text-zinc-500">{hazard.zone}</p>
+                </div>
+                <span className="shrink-0 rounded border border-zinc-700 bg-[#050505] px-2 py-0.5 font-mono text-xs text-zinc-300">{hazard.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6">
+          <h3 className="font-bold text-base text-white mb-4">{t('weeklySummary')}</h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t('newItems')}</p>
+              <p className="mt-2 text-xl font-bold text-white">{stats?.weekly_summary?.incidents ?? 0}</p>
+            </div>
+            <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t('resolved')}</p>
+              <p className="mt-2 text-xl font-bold text-emerald-400">{stats?.weekly_summary?.resolved ?? 0}</p>
+            </div>
+            <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t('delta')}</p>
+              <p className={`mt-2 text-xl font-bold ${(stats?.weekly_summary?.delta ?? 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                {(stats?.weekly_summary?.delta ?? 0) > 0 ? '+' : ''}{stats?.weekly_summary?.delta ?? 0}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 flex flex-col overflow-hidden">
         <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/30">
           <h3 className="font-bold text-base text-white">{t('liveIncidentFeed')}</h3>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-start text-sm text-zinc-400" role="grid" aria-label="Live incident feed table">
+        <div className="w-full overflow-x-auto overscroll-x-contain">
+          <table className="min-w-[760px] w-full text-start text-sm text-zinc-400" role="grid" aria-label="Live incident feed table">
             <thead className="bg-zinc-900/50 text-zinc-500 uppercase text-[10px] font-bold tracking-wider border-b border-zinc-800">
               <tr role="row">
                 <th className="px-6 py-3 text-start" role="columnheader">{t('severity')}</th>
@@ -295,15 +339,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
                 <tr key={alert.id} className="hover:bg-zinc-900/40 transition-colors group" role="row">
                   <td className="px-6 py-3" role="cell"><SeverityBadge severity={alert.severity} /></td>
                   <td className="px-6 py-3" role="cell">
-                    <div className="flex items-center space-x-3 rtl:space-x-reverse">
-                       <div className="w-10 h-10 rounded bg-black overflow-hidden border border-zinc-800">
+                    <div className="flex min-w-0 items-center space-x-3 rtl:space-x-reverse">
+                       <div className="w-10 h-10 shrink-0 rounded bg-black overflow-hidden border border-zinc-800">
                           <img 
                             src={alert.thumbnail} 
                             className="w-full h-full object-cover" 
                             alt={`Alert video frame: ${alert.type}`}
                           />
                        </div>
-                      <span className="text-zinc-200 font-semibold">{alert.type}</span>
+                      <span className="min-w-0 truncate text-zinc-200 font-semibold">{alert.type}</span>
                     </div>
                     <CompactMetadataRow alert={alert} />
                   </td>
@@ -319,8 +363,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
                   <td className="px-6 py-3 text-end" role="cell">
                     <button 
                       className={`p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-white transition-colors ${a11yClasses.focusRing}`}
-                      onClick={() => window.alert(`Action options for ${alert.id}`)}
-                      aria-label={`Action menu for alert ${alert.id}`}
+                      onClick={onViewAlerts}
+                      aria-label={`Open alert feed for ${alert.id}`}
                     >
                        <MoreHorizontal size={16} aria-hidden="true" />
                     </button>

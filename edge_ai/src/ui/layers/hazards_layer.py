@@ -62,17 +62,27 @@ def build_hazard_label(event: HazardEvent, calibrated: bool) -> str:
             return f"[!] POSTURE {sev}  {score:.0f}"
         return f"[!] POSTURE {sev}"
 
-    if et == "forklift_proximity_danger":
+    if et == "forklift_proximity" or et.startswith("forklift_proximity_"):
+        stage = str(meta.get("proximity_alert_stage") or et.rsplit("_", 1)[-1]).replace("_", " ").upper()
+        risk_score = meta.get("risk_score")
+        dist_m = meta.get("distance_m")
+        if risk_score is not None and dist_m is not None:
+            return f"[!] FORKLIFT {stage}  {risk_score:.0f}  {dist_m:.1f}m"
+        if dist_m is not None:
+            return f"[!] FORKLIFT {stage}  {dist_m:.1f}m"
         dist_px = meta.get("distance_px")
         if dist_px is not None:
-            return f"[!] FORKLIFT DANGER  {dist_px:.0f}px"
-        return "[!] FORKLIFT DANGER"
+            return f"[!] FORKLIFT {stage}  {dist_px:.0f}px"
+        return f"[!] FORKLIFT {stage}"
 
-    if et == "forklift_proximity_warning":
-        dist_px = meta.get("distance_px")
-        if dist_px is not None:
-            return f"[!] FORKLIFT WARNING  {dist_px:.0f}px"
-        return "[!] FORKLIFT WARNING"
+    if et == "forklift_overspeed":
+        speed = meta.get("forklift_speed_mps") or meta.get("speed_mps")
+        limit = meta.get("limit_mps")
+        if speed is not None and limit is not None:
+            return f"[!] OVERSPEED {sev}  {float(speed):.1f}>{float(limit):.1f}m/s"
+        if speed is not None:
+            return f"[!] OVERSPEED {sev}  {float(speed):.1f}m/s"
+        return f"[!] OVERSPEED {sev}"
 
     # Generic fallback — truncate to keep label width manageable
     short = et.replace("_", " ").upper()[:20]
@@ -121,6 +131,8 @@ class HazardsLayer:
         has_fill = False
 
         for ev in sorted_ev:
+            if _is_render_only_telemetry(ev):
+                continue
             if not ev.bbox:
                 continue
             x1, y1, x2, y2 = ev.bbox
@@ -141,6 +153,8 @@ class HazardsLayer:
         if has_fill:
             cv2.addWeighted(overlay, t.alpha_hazard_fill, frame, 1.0 - t.alpha_hazard_fill, 0, frame)
 
+        self._draw_proximity_distance_lines(frame, sorted_ev)
+
         # ── border + label pass ──────────────────────────────────────
         label_scale = t.font_md * cfg.overlay_scale
 
@@ -150,6 +164,8 @@ class HazardsLayer:
         track_labels: dict[Optional[int], list[tuple]] = defaultdict(list)
 
         for ev in sorted_ev:
+            if _is_render_only_telemetry(ev):
+                continue
             if not ev.bbox:
                 continue
             x1, y1, x2, y2 = ev.bbox
@@ -190,3 +206,76 @@ class HazardsLayer:
                     t.font, label_scale, c, t.thick_thin, cv2.LINE_AA,
                 )
                 ly += row_h + 2
+
+    def _draw_proximity_distance_lines(
+        self,
+        frame: np.ndarray,
+        events: List[HazardEvent],
+    ) -> None:
+        t = self.theme
+        fh, fw = frame.shape[:2]
+        for ev in events:
+            meta = ev.metadata or {}
+            if (
+                ev.event_type not in {"forklift_proximity", "forklift_distance_telemetry"}
+                and meta.get("case_type") not in {"forklift_proximity", "forklift_distance_telemetry"}
+            ):
+                continue
+            worker_pt = _point_from_meta(meta.get("worker_bottom_center"))
+            forklift_pt = _point_from_meta(meta.get("forklift_bottom_center"))
+            distance_m = meta.get("distance_m")
+            if worker_pt is None or forklift_pt is None or distance_m is None:
+                continue
+
+            wx, wy = _clamp_point(worker_pt, fw, fh)
+            fx, fy = _clamp_point(forklift_pt, fw, fh)
+            colour = _sev_colour(ev.severity, t)
+            cv2.line(frame, (wx, wy), (fx, fy), colour, 2, cv2.LINE_AA)
+            cv2.circle(frame, (wx, wy), 4, colour, -1, cv2.LINE_AA)
+            cv2.circle(frame, (fx, fy), 4, colour, -1, cv2.LINE_AA)
+
+            label = f"{float(distance_m):.1f}m"
+            mx, my = (wx + fx) // 2, (wy + fy) // 2
+            (tw, th), bl = cv2.getTextSize(label, t.font, t.font_md, t.thick_thin)
+            pad = 4
+            x1 = max(0, min(fw - tw - 2 * pad - 1, mx - tw // 2 - pad))
+            y1 = max(th + bl + pad, my - 8)
+            cv2.rectangle(
+                frame,
+                (x1, y1 - th - bl - pad),
+                (x1 + tw + 2 * pad, y1 + pad),
+                t.bg_panel,
+                -1,
+            )
+            cv2.putText(
+                frame,
+                label,
+                (x1 + pad, y1 - bl),
+                t.font,
+                t.font_md,
+                colour,
+                t.thick_thin,
+                cv2.LINE_AA,
+            )
+
+
+def _point_from_meta(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        return float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_render_only_telemetry(event: HazardEvent) -> bool:
+    if not (event.metadata or {}).get("render_only"):
+        return False
+    return event.event_type in {"forklift_telemetry", "forklift_distance_telemetry"}
+
+
+def _clamp_point(point: tuple[float, float], fw: int, fh: int) -> tuple[int, int]:
+    return (
+        max(0, min(fw - 1, int(round(point[0])))),
+        max(0, min(fh - 1, int(round(point[1])))),
+    )

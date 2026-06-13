@@ -133,7 +133,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               error={passwordError}
               errorId="password-error"
               helpId="password-help"
-              helpText="Emails: hisham@visionsafe.co / hisham123, soltan@visionsafe.co / soltan123, raneem@visionsafe.co / raneem123, john@visionsafe.co / john123, shams@visionsafe.co / shams123"
+              helpText="Use your company email and password."
             >
               <TextInput
                 id="password-input"
@@ -151,7 +151,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 }}
                 leadingIcon={<Lock size={18} />}
                 className="rounded-xl bg-black py-3 ps-10 pe-4 placeholder-zinc-800"
-                placeholder="Demo password"
+                placeholder="Password"
                 error={!!passwordError}
                 aria-describedby={passwordError ? 'password-error' : 'password-help'}
               />
@@ -174,7 +174,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </form>
           <div className="mt-8 pt-6 border-t border-zinc-800 text-center">
             <p className="text-[9px] text-zinc-600 uppercase tracking-widest font-mono">
-              V4.5.0-STABLE • JWT SESSION ACTIVE
+              Secure operator access
             </p>
           </div>
         </div>

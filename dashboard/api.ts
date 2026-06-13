@@ -10,13 +10,21 @@ import {
   AnalyticsStats,
   AnalyticsTimeSeriesPoint,
   Camera,
+  CameraSourceType,
   DemoVideo,
   ErgonomicRecord,
   ErgonomicStats,
   Incident,
+  IncidentEvent,
   JobStatus,
+  NotificationRecord,
+  CameraSafetyZone,
+  SafetyZoneEvent,
+  SafetyZoneRule,
+  SafetyZoneStats,
   SystemHealthSnapshot,
   User,
+  ZonePoint,
 } from './types';
 
 const env = (import.meta as any).env ?? {};
@@ -47,6 +55,25 @@ function resolveWsBaseUrl(): string {
 export const WS_BASE_URL = resolveWsBaseUrl();
 
 const TOKEN_KEY = 'visionsafe360_token';
+const EVIDENCE_ASSET_VERSION = '2';
+
+function isOverspeedRecord(...values: unknown[]): boolean {
+  return values.some(value => /overspeed/i.test(String(value ?? '')));
+}
+
+function displayAlertType(record: any): Alert['type'] {
+  if (isOverspeedRecord(record.type, record.description, record.classification, record.root_cause)) {
+    return 'Overspeed';
+  }
+  return String(record.type ?? 'Intrusion') as Alert['type'];
+}
+
+function displayIncidentClassification(record: any): string {
+  if (isOverspeedRecord(record.classification, record.root_cause, record.description)) {
+    return 'Forklift Overspeed';
+  }
+  return String(record.classification ?? 'Hazard');
+}
 
 function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -104,11 +131,109 @@ function toFrontendCamera(c: any): Camera {
     severityProfile: c.severity_profile ?? c.severityProfile ?? null,
     url:           c.url,
     stream_url:    c.stream_url,
+    source_type:   c.source_type ?? c.sourceType ?? null,
+    mediamtxPath:  c.mediamtx_path ?? c.mediamtxPath ?? null,
+    deviceIndex:   c.device_index ?? c.deviceIndex ?? null,
     status:        c.status,
     isPrivacyMode: c.is_privacy_mode,
     thumbnail:     c.thumbnail,
     fps:           c.fps,
     health:        c.health,
+  };
+}
+
+function toFrontendZoneRule(rule: any): SafetyZoneRule {
+  return {
+    allowedClasses: Array.isArray(rule?.allowed_classes) ? rule.allowed_classes : (Array.isArray(rule?.allowedClasses) ? rule.allowedClasses : ['person', 'forklift']),
+    deniedClasses: Array.isArray(rule?.denied_classes) ? rule.denied_classes : (Array.isArray(rule?.deniedClasses) ? rule.deniedClasses : []),
+    occupancyThreshold: rule?.occupancy_threshold ?? rule?.occupancyThreshold ?? null,
+    dwellTimeLimitSec: rule?.dwell_time_limit_sec ?? rule?.dwellTimeLimitSec ?? null,
+    cooldownSec: Number(rule?.cooldown_sec ?? rule?.cooldownSec ?? 30),
+    minPersistenceSec: Number(rule?.min_persistence_sec ?? rule?.minPersistenceSec ?? 0.5),
+    severity: rule?.severity ?? 'High',
+  };
+}
+
+function toBackendZoneRule(rule: SafetyZoneRule): any {
+  return {
+    allowed_classes: rule.allowedClasses,
+    denied_classes: rule.deniedClasses,
+    occupancy_threshold: rule.occupancyThreshold ?? null,
+    dwell_time_limit_sec: rule.dwellTimeLimitSec ?? null,
+    cooldown_sec: rule.cooldownSec,
+    min_persistence_sec: rule.minPersistenceSec,
+    severity: rule.severity,
+  };
+}
+
+function toFrontendSafetyZone(zone: any): CameraSafetyZone {
+  return {
+    id: String(zone.id ?? ''),
+    cameraId: String(zone.camera_id ?? zone.cameraId ?? ''),
+    name: String(zone.name ?? ''),
+    zoneType: zone.zone_type ?? zone.zoneType ?? 'custom',
+    polygon: Array.isArray(zone.polygon) ? zone.polygon.map((point: any): ZonePoint => ({ x: Number(point.x), y: Number(point.y) })) : [],
+    coordinateSpace: String(zone.coordinate_space ?? zone.coordinateSpace ?? 'source_pixels'),
+    sourceWidth: Number(zone.source_width ?? zone.sourceWidth ?? 1280),
+    sourceHeight: Number(zone.source_height ?? zone.sourceHeight ?? 720),
+    color: String(zone.color ?? '#f97316'),
+    enabled: Boolean(zone.enabled ?? true),
+    priority: Number(zone.priority ?? 100),
+    rules: toFrontendZoneRule(zone.rules ?? {}),
+    description: zone.description ?? null,
+    createdAt: zone.created_at ?? zone.createdAt ?? null,
+    updatedAt: zone.updated_at ?? zone.updatedAt ?? null,
+  };
+}
+
+function toBackendSafetyZone(zone: Partial<CameraSafetyZone>): any {
+  const body: any = {};
+  if (zone.id !== undefined) body.id = zone.id;
+  if (zone.name !== undefined) body.name = zone.name;
+  if (zone.zoneType !== undefined) body.zone_type = zone.zoneType;
+  if (zone.polygon !== undefined) body.polygon = zone.polygon;
+  if (zone.coordinateSpace !== undefined) body.coordinate_space = zone.coordinateSpace;
+  if (zone.sourceWidth !== undefined) body.source_width = zone.sourceWidth;
+  if (zone.sourceHeight !== undefined) body.source_height = zone.sourceHeight;
+  if (zone.color !== undefined) body.color = zone.color;
+  if (zone.enabled !== undefined) body.enabled = zone.enabled;
+  if (zone.priority !== undefined) body.priority = zone.priority;
+  if (zone.rules !== undefined) body.rules = toBackendZoneRule(zone.rules);
+  if (zone.description !== undefined) body.description = zone.description;
+  return body;
+}
+
+function toFrontendSafetyZoneEvent(event: any): SafetyZoneEvent {
+  return {
+    id: String(event.id ?? ''),
+    zoneId: String(event.zone_id ?? event.zoneId ?? ''),
+    cameraId: String(event.camera_id ?? event.cameraId ?? ''),
+    eventType: String(event.event_type ?? event.eventType ?? ''),
+    objectClass: String(event.object_class ?? event.objectClass ?? ''),
+    trackId: event.track_id ?? event.trackId ?? null,
+    stableObjectKey: String(event.stable_object_key ?? event.stableObjectKey ?? ''),
+    severity: event.severity ?? 'Medium',
+    occurredAt: String(event.occurred_at ?? event.occurredAt ?? ''),
+    durationInsideSec: event.duration_inside_sec ?? event.durationInsideSec ?? null,
+    occupancyCount: event.occupancy_count ?? event.occupancyCount ?? null,
+    frameNumber: event.frame_number ?? event.frameNumber ?? null,
+    bbox: event.bbox ?? null,
+    anchorPoint: event.anchor_point ?? event.anchorPoint ?? null,
+    metadata: event.event_metadata ?? event.metadata ?? null,
+    alertId: event.alert_id ?? event.alertId ?? null,
+  };
+}
+
+function toFrontendSafetyZoneStats(stats: any): SafetyZoneStats {
+  return {
+    zoneId: String(stats.zone_id ?? stats.zoneId ?? ''),
+    cameraId: String(stats.camera_id ?? stats.cameraId ?? ''),
+    eventCount: Number(stats.event_count ?? stats.eventCount ?? 0),
+    violationCount: Number(stats.violation_count ?? stats.violationCount ?? 0),
+    currentOccupancy: Number(stats.current_occupancy ?? stats.currentOccupancy ?? 0),
+    avgDwellTimeSec: Number(stats.avg_dwell_time_sec ?? stats.avgDwellTimeSec ?? 0),
+    maxDwellTimeSec: Number(stats.max_dwell_time_sec ?? stats.maxDwellTimeSec ?? 0),
+    lastEventAt: stats.last_event_at ?? stats.lastEventAt ?? null,
   };
 }
 
@@ -118,6 +243,30 @@ function appendAuthToken(url: string | null | undefined): string {
   if (!token) return url;
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function appendQueryParam(url: string, key: string, value: string): string {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
+function toAssetUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (value.startsWith('data:') || value.startsWith('http://') || value.startsWith('https://')) {
+    return value;
+  }
+  const evidencePath = '/storage/evidence/';
+  const evidenceIndex = value.indexOf(evidencePath);
+  if (evidenceIndex >= 0) {
+    return appendQueryParam(`${BASE_URL}${value.slice(evidenceIndex)}`, 'ev', EVIDENCE_ASSET_VERSION);
+  }
+  return value;
+}
+
+function toEvidenceUrl(value: string | null | undefined): string | null {
+  const url = toAssetUrl(value);
+  if (!url || url.startsWith('data:')) return url;
+  return appendQueryParam(url, 'codec', 'h264');
 }
 
 function toFrontendDemoVideo(v: any): DemoVideo {
@@ -135,15 +284,57 @@ function toFrontendIncident(i: any): Incident {
   return {
     id:               i.id,
     zone:             i.zone,
-    classification:   i.classification,
+    classification:   displayIncidentClassification(i),
     severity:         i.severity,
     cameraId:         i.camera_id ?? i.cameraId ?? null,
     cameraName:       i.camera_name ?? i.cameraName ?? null,
     workerId:         i.worker_id ?? i.workerId ?? null,
     workerGpuId:      i.worker_gpu_id ?? i.workerGpuId ?? null,
+    status:           i.status ?? 'New',
+    startedAt:        i.started_at ?? i.startedAt ?? null,
+    validatedAt:      i.validated_at ?? i.validatedAt ?? null,
+    acknowledgedAt:   i.acknowledged_at ?? i.acknowledgedAt ?? null,
+    acknowledgedBy:   i.acknowledged_by ?? i.acknowledgedBy ?? null,
+    resolvedAt:       i.resolved_at ?? i.resolvedAt ?? null,
+    resolvedBy:       i.resolved_by ?? i.resolvedBy ?? null,
+    archivedAt:       i.archived_at ?? i.archivedAt ?? null,
+    slaBreachedAt:    i.sla_breached_at ?? i.slaBreachedAt ?? null,
+    slaAckBreachedAt: i.sla_ack_breached_at ?? i.slaAckBreachedAt ?? null,
+    slaResolutionBreachedAt: i.sla_resolution_breached_at ?? i.slaResolutionBreachedAt ?? null,
+    slaBreachCount:   Number(i.sla_breach_count ?? i.slaBreachCount ?? 0),
+    durationSeconds:  i.duration_seconds ?? i.durationSeconds ?? null,
+    escalationCount:  Number(i.escalation_count ?? i.escalationCount ?? 0),
     rootCause:        i.root_cause,
     correctiveAction: i.corrective_action,
     createdAt:        i.created_at,
+  };
+}
+
+function toFrontendIncidentEvent(event: any): IncidentEvent {
+  return {
+    id: String(event.id ?? ''),
+    incidentId: String(event.incident_id ?? event.incidentId ?? ''),
+    action: String(event.action ?? ''),
+    previousStatus: event.previous_status ?? event.previousStatus ?? null,
+    newStatus: event.new_status ?? event.newStatus ?? null,
+    actorId: event.actor_id ?? event.actorId ?? null,
+    actorName: event.actor_name ?? event.actorName ?? null,
+    note: event.note ?? null,
+    metadata: event.event_metadata ?? event.metadata ?? null,
+    createdAt: String(event.created_at ?? event.createdAt ?? ''),
+  };
+}
+
+function toFrontendNotification(record: any): NotificationRecord {
+  return {
+    id: String(record.id ?? ''),
+    userId: record.user_id ?? record.userId ?? null,
+    title: String(record.title ?? ''),
+    message: String(record.message ?? ''),
+    type: String(record.type ?? 'info'),
+    isRead: Boolean(record.is_read ?? record.isRead ?? false),
+    source: record.source ?? null,
+    createdAt: String(record.created_at ?? record.createdAt ?? ''),
   };
 }
 
@@ -162,7 +353,8 @@ function toFrontendJobStatus(s: any): JobStatus {
 function toFrontendAlert(a: any): Alert {
   return {
     id:          a.id,
-    type:        a.type,
+    incidentId:  a.incident_id ?? a.incidentId ?? null,
+    type:        displayAlertType(a),
     severity:    a.severity,
     zone:        a.zone,
     areaId:      a.area_id ?? a.areaId ?? null,
@@ -178,8 +370,11 @@ function toFrontendAlert(a: any): Alert {
     timestamp:   a.occurred_at || a.timestamp || a.created_at || '',
     status:      a.status,
     description: a.description,
-    thumbnail:   a.thumbnail ?? null,
+    thumbnail:   toAssetUrl(a.thumbnail ?? null),
+    eventFrame:  toAssetUrl(a.event_frame ?? a.eventFrame ?? null),
+    videoEvidence: toEvidenceUrl(a.video_evidence ?? a.videoEvidence ?? null),
     confidence:  a.confidence ?? null,
+    trackId:     a.track_id ?? a.trackId ?? null,
     frameNumber: a.frame_number ?? a.frameNumber ?? null,
     frameWidth:  a.frame_width ?? a.frameWidth ?? null,
     frameHeight: a.frame_height ?? a.frameHeight ?? null,
@@ -267,6 +462,26 @@ function toFrontendAnalyticsStats(stats: any): AnalyticsStats {
     safetyScore: Number(stats.safety_score ?? 0),
     incidentsLast7Days: Number(stats.incidents_last_7_days ?? 0),
     incidentsPrevious7Days: Number(stats.incidents_previous_7_days ?? 0),
+    avgResolutionTimeSeconds: Number(stats.avg_resolution_time_seconds ?? 0),
+    slaBreachCount: Number(stats.sla_breach_count ?? stats.slaBreachCount ?? 0),
+    slaBreachRate: Number(stats.sla_breach_rate ?? stats.slaBreachRate ?? 0),
+    avgResponseTimeSeconds: Number(stats.avg_response_time_seconds ?? stats.avgResponseTimeSeconds ?? 0),
+    topDangerousZones: Array.isArray(stats.top_dangerous_zones) ? stats.top_dangerous_zones.map((zone: any) => ({
+      zone: String(zone.zone ?? 'Unassigned'),
+      incidentCount: Number(zone.incident_count ?? zone.incidentCount ?? 0),
+      riskScore: Number(zone.risk_score ?? zone.riskScore ?? 0),
+    })) : [],
+    recurringHazards: Array.isArray(stats.recurring_hazards) ? stats.recurring_hazards.map((hazard: any) => ({
+      zone: String(hazard.zone ?? 'Unassigned'),
+      classification: String(hazard.classification ?? 'Hazard'),
+      count: Number(hazard.count ?? 0),
+    })) : [],
+    weeklySummary: stats.weekly_summary ? {
+      incidents: Number(stats.weekly_summary.incidents ?? 0),
+      previousIncidents: Number(stats.weekly_summary.previous_incidents ?? 0),
+      resolved: Number(stats.weekly_summary.resolved ?? 0),
+      delta: Number(stats.weekly_summary.delta ?? 0),
+    } : undefined,
   };
 }
 
@@ -340,6 +555,10 @@ function toFrontendSystemHealth(data: any): SystemHealthSnapshot {
 
 function toBackendAlert(alert: Partial<Alert>): any {
   const body: any = { ...alert };
+  if (alert.incidentId !== undefined) {
+    body.incident_id = alert.incidentId;
+    delete body.incidentId;
+  }
   if (alert.timestamp !== undefined) {
     body.occurred_at = alert.timestamp;
     delete body.timestamp;
@@ -380,6 +599,18 @@ function toBackendAlert(alert: Partial<Alert>): any {
     body.location_description = alert.locationDescription;
     delete body.locationDescription;
   }
+  if (alert.videoEvidence !== undefined) {
+    body.video_evidence = alert.videoEvidence;
+    delete body.videoEvidence;
+  }
+  if (alert.eventFrame !== undefined) {
+    body.event_frame = alert.eventFrame;
+    delete body.eventFrame;
+  }
+  if (alert.trackId !== undefined) {
+    body.track_id = alert.trackId;
+    delete body.trackId;
+  }
   return body;
 }
 
@@ -404,6 +635,11 @@ export const AlertsAPI = {
   getEvents: async (id: string): Promise<AlertEvent[]> => {
     const data = await request<any[]>(`/api/alerts/${id}/events`);
     return Array.isArray(data) ? data.map(toFrontendAlertEvent) : [];
+  },
+
+  getById: async (id: string): Promise<Alert> => {
+    const data = await request<any>(`/api/alerts/${id}`);
+    return toFrontendAlert(data);
   },
 
   create: async (alert: Alert): Promise<Alert> => {
@@ -458,11 +694,68 @@ export const CamerasAPI = {
       body.severity_profile = camera.severityProfile;
       delete body.severityProfile;
     }
+    if (camera.mediamtxPath !== undefined) {
+      body.mediamtx_path = camera.mediamtxPath;
+      delete body.mediamtxPath;
+    }
+    if (camera.deviceIndex !== undefined) {
+      body.device_index = camera.deviceIndex;
+      delete body.deviceIndex;
+    }
     const data = await request<any>('/api/cameras', {
       method: 'POST',
       body: JSON.stringify(body),
     });
     return toFrontendCamera(data);
+  },
+
+  uploadAndCreate: (
+    fields: {
+      file: File;
+      name: string;
+      areaName: string;
+      zoneName: string;
+      locationDescription?: string;
+    },
+    onProgress?: (percent: number) => void,
+  ): Promise<Camera> => {
+    return new Promise((resolve, reject) => {
+      const token = getToken();
+      const fd = new FormData();
+      fd.append('file', fields.file);
+      fd.append('name', fields.name);
+      fd.append('zone', `${fields.areaName} / ${fields.zoneName}`);
+      fd.append('area_name', fields.areaName);
+      fd.append('zone_name', fields.zoneName);
+      if (fields.locationDescription) fd.append('location_description', fields.locationDescription);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${BASE_URL}/api/cameras/upload`);
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (onProgress && e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(toFrontendCamera(JSON.parse(xhr.responseText)));
+          } catch (err) {
+            reject(err);
+          }
+        } else {
+          let detail = `Upload failed: HTTP ${xhr.status}`;
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            if (parsed?.detail) detail = parsed.detail;
+          } catch { /* ignore */ }
+          reject(new Error(detail));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(fd);
+    });
   },
 
   update: async (id: string, changes: Partial<Camera>): Promise<Camera> => {
@@ -499,11 +792,48 @@ export const CamerasAPI = {
       body.severity_profile = changes.severityProfile;
       delete body.severityProfile;
     }
+    if (changes.mediamtxPath !== undefined) {
+      body.mediamtx_path = changes.mediamtxPath;
+      delete body.mediamtxPath;
+    }
+    if (changes.deviceIndex !== undefined) {
+      body.device_index = changes.deviceIndex;
+      delete body.deviceIndex;
+    }
     const data = await request<any>(`/api/cameras/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
     return toFrontendCamera(data);
+  },
+
+  /**
+   * Returns cameras mapped into the DemoVideo-shaped contract that
+   * LiveMonitoring consumes for its source grid. For file sources the
+   * streamUrl is the HTTP video endpoint with auth token; for live
+   * sources it falls back to the WS AI stream URL.
+   */
+  toSourceCards: async (): Promise<DemoVideo[]> => {
+    const cameras = await CamerasAPI.getAll();
+    return cameras.map((cam): DemoVideo => {
+      const sourceType: CameraSourceType =
+        (cam.source_type as CameraSourceType) ?? 'rtsp';
+      const isFile = sourceType === 'file';
+      const streamUrl = isFile && cam.stream_url
+        ? appendAuthToken(`/api/media/videos/${cam.stream_url}`)
+        : getAIStreamUrl(cam.id);
+      return {
+        id: cam.id,
+        cameraId: cam.id,
+        name: cam.name,
+        fileName: cam.stream_url || '',
+        zone: cam.zone || cam.zoneName || '',
+        description: cam.locationDescription || '',
+        streamUrl,
+        sourceType,
+        type: sourceType === 'file' ? 'upload' : undefined,
+      };
+    });
   },
 
   delete: (id: string) =>
@@ -516,14 +846,64 @@ export const CamerasAPI = {
     request<any>(`/api/cameras/${id}/stop`, { method: 'POST' }),
 };
 
+export const SafetyZonesAPI = {
+  listForCamera: async (cameraId: string): Promise<CameraSafetyZone[]> => {
+    const data = await request<any[]>(`/api/cameras/${encodeURIComponent(cameraId)}/safety-zones`);
+    return data.map(toFrontendSafetyZone);
+  },
+
+  create: async (cameraId: string, zone: Partial<CameraSafetyZone>): Promise<CameraSafetyZone> => {
+    const data = await request<any>(`/api/cameras/${encodeURIComponent(cameraId)}/safety-zones`, {
+      method: 'POST',
+      body: JSON.stringify(toBackendSafetyZone(zone)),
+    });
+    return toFrontendSafetyZone(data);
+  },
+
+  update: async (zoneId: string, zone: Partial<CameraSafetyZone>): Promise<CameraSafetyZone> => {
+    const data = await request<any>(`/api/safety-zones/${encodeURIComponent(zoneId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(toBackendSafetyZone(zone)),
+    });
+    return toFrontendSafetyZone(data);
+  },
+
+  setEnabled: async (zoneId: string, enabled: boolean): Promise<CameraSafetyZone> => {
+    const data = await request<any>(`/api/safety-zones/${encodeURIComponent(zoneId)}/enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
+    return toFrontendSafetyZone(data);
+  },
+
+  delete: (zoneId: string) =>
+    request<void>(`/api/safety-zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
+
+  eventsForCamera: async (cameraId: string): Promise<SafetyZoneEvent[]> => {
+    const data = await request<any[]>(`/api/cameras/${encodeURIComponent(cameraId)}/safety-zone-events`);
+    return data.map(toFrontendSafetyZoneEvent);
+  },
+
+  statsForCamera: async (cameraId: string): Promise<SafetyZoneStats[]> => {
+    const data = await request<any[]>(`/api/cameras/${encodeURIComponent(cameraId)}/safety-zone-stats`);
+    return data.map(toFrontendSafetyZoneStats);
+  },
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // INCIDENTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const IncidentsAPI = {
-  getAll: async (options: RequestInit = {}): Promise<Incident[]> => {
-    const data = await request<any[]>('/api/incidents/all', options);
+  getAll: async (options: RequestInit = {}, view?: 'active' | 'history'): Promise<Incident[]> => {
+    const suffix = view ? `?view=${encodeURIComponent(view)}` : '';
+    const data = await request<any[]>(`/api/incidents/all${suffix}`, options);
     return data.map(toFrontendIncident);
+  },
+
+  getById: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}`);
+    return toFrontendIncident(data);
   },
 
   create: async (incident: Incident): Promise<Incident> => {
@@ -536,6 +916,20 @@ export const IncidentsAPI = {
       camera_name:       incident.cameraName,
       worker_id:         incident.workerId,
       worker_gpu_id:     incident.workerGpuId,
+      status:            incident.status,
+      started_at:        incident.startedAt,
+      validated_at:      incident.validatedAt,
+      acknowledged_at:   incident.acknowledgedAt,
+      acknowledged_by:   incident.acknowledgedBy,
+      resolved_at:       incident.resolvedAt,
+      resolved_by:       incident.resolvedBy,
+      archived_at:       incident.archivedAt,
+      sla_breached_at:   incident.slaBreachedAt,
+      sla_ack_breached_at: incident.slaAckBreachedAt,
+      sla_resolution_breached_at: incident.slaResolutionBreachedAt,
+      sla_breach_count:  incident.slaBreachCount,
+      duration_seconds:  incident.durationSeconds,
+      escalation_count:  incident.escalationCount,
       root_cause:        incident.rootCause,
       corrective_action: incident.correctiveAction,
       created_at:        incident.createdAt,
@@ -547,8 +941,56 @@ export const IncidentsAPI = {
     return toFrontendIncident(data);
   },
 
-  delete: (id: string) =>
-    request<void>(`/api/incidents/${id}`, { method: 'DELETE' }),
+  updateStatus: async (id: string, status: Incident['status'], note?: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, note }),
+    });
+    return toFrontendIncident(data);
+  },
+
+  acknowledge: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/acknowledge`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  resolve: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/resolve`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  archive: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/archive`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  reopen: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/reopen`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  escalate: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/escalate`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  falsePositive: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/false-positive`, { method: 'PATCH' });
+    return toFrontendIncident(data);
+  },
+
+  getEvents: async (id: string): Promise<IncidentEvent[]> => {
+    const data = await request<any[]>(`/api/incidents/${id}/events`);
+    return Array.isArray(data) ? data.map(toFrontendIncidentEvent) : [];
+  },
+
+  checkSla: async (id: string): Promise<Incident> => {
+    const data = await request<any>(`/api/incidents/${id}/sla/check`, { method: 'POST' });
+    return toFrontendIncident(data);
+  },
+
+  checkAllSla: () =>
+    request<{ checked: number; breached: number }>('/api/incidents/sla/check', { method: 'POST' }),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -599,6 +1041,26 @@ export const SystemHealthAPI = {
     const data = await request<any>('/api/monitoring/system-health');
     return toFrontendSystemHealth(data);
   },
+};
+
+export const NotificationsAPI = {
+  getAll: async (): Promise<NotificationRecord[]> => {
+    const data = await request<any>('/api/notifications?limit=50');
+    const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+    return items.map(toFrontendNotification);
+  },
+
+  markRead: (ids: string[]) =>
+    request<void>('/api/notifications/mark-read', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
+  markAllRead: () =>
+    request<void>('/api/notifications/mark-all-read', { method: 'POST' }),
+
+  delete: (id: string) =>
+    request<void>(`/api/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

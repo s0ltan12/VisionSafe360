@@ -76,6 +76,32 @@ def incidents_by_zone(
     return AnalyticsService.get_incidents_by_zone(db, limit=limit)
 
 
+@router.get("/incidents/avg-resolution-time")
+def incidents_avg_resolution_time(db: Session = Depends(get_db)):
+    return {"avg_resolution_time_seconds": AnalyticsService.get_avg_resolution_time(db)}
+
+
+@router.get("/incidents/recurring-hazards")
+def incidents_recurring_hazards(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return AnalyticsService.get_recurring_hazards(db, limit=limit)
+
+
+@router.get("/incidents/top-dangerous-zones")
+def incidents_top_dangerous_zones(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return AnalyticsService.get_top_dangerous_zones(db, limit=limit)
+
+
+@router.get("/incidents/weekly-summary")
+def incidents_weekly_summary(db: Session = Depends(get_db)):
+    return AnalyticsService.get_weekly_summary(db)
+
+
 @router.get("/ergonomics/trend")
 def ergonomic_trend(
     days: int = Query(7, ge=1, le=90),

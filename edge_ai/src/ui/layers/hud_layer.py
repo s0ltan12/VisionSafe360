@@ -10,9 +10,6 @@ Displays a small semi-transparent panel containing inference KPIs:
     Hazards: 2             ← coloured orange/red when elevated
     Pose: 6.2 ms
     Track cov: 94%
-    CALIBRATED: METERS MODE   ← green (small)
-    -- or --
-    UNCALIBRATED: PX MODE     ← red (large, bold)
 """
 from __future__ import annotations
 
@@ -83,28 +80,16 @@ class HUDLayer:
                 t.safe if pct >= 80 else t.warning,
             ))
 
-        # Calibration line (may need larger scale)
-        if calibrated:
-            calib_text = "CALIBRATED: METERS MODE"
-            calib_c = t.safe
-            calib_scale = sm * 0.85
-            calib_thick = t.thick_thin
-        else:
-            calib_text = "UNCALIBRATED: PX MODE"
-            calib_c = t.critical
-            calib_scale = md * 1.05
-            calib_thick = t.thick_std
-
         # ── Measure background rect ───────────────────────────────────
         (_, char_h), _ = cv2.getTextSize("A", t.font, sm, 1)
         row_h = char_h + 8
-        all_texts = [txt for txt, _ in lines] + [calib_text]
+        all_texts = [txt for txt, _ in lines]
         max_tw = max(
             cv2.getTextSize(txt, t.font, sm, 1)[0][0]
             for txt in all_texts
         )
         bg_w = max_tw + 16
-        bg_h = len(lines) * row_h + row_h + 8   # extra row for calibration
+        bg_h = len(lines) * row_h + 8
 
         # ── Draw background ───────────────────────────────────────────
         overlay = self._overlay_buf(frame)
@@ -119,9 +104,3 @@ class HUDLayer:
                 t.font, sm, colour, t.thick_thin, cv2.LINE_AA,
             )
             y += row_h
-
-        # ── Calibration status ────────────────────────────────────────
-        cv2.putText(
-            frame, calib_text, (8, y + 2),
-            t.font, calib_scale, calib_c, calib_thick, cv2.LINE_AA,
-        )

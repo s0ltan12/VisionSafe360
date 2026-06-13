@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .api.routes.stats import router as stats_router
 from .api.routes.alerts import router as alerts_router
@@ -23,6 +26,7 @@ from .api.routes.monitoring import router as monitoring_router
 from .api.routes.notifications import router as notifications_router
 from .api.routes.incidents import router as incidents_router
 from .api.routes.ingest import router as ingest_router
+from .api.routes.safety_zones import router as safety_zones_router
 from .api.routes.users import router as users_router
 from .api.websocket.ws_handler import router as incidents_ws_router
 from .api.websocket.ws_notifications import router as notifications_ws_router
@@ -30,7 +34,7 @@ from .api.websocket.ws_stream import router as stream_ws_router
 from .config.database import Base, engine
 from .config.settings import settings
 from .seed import seed
-from .services.schema_maintenance import ensure_alert_lifecycle_schema
+from .services.schema_maintenance import ensure_alert_lifecycle_schema, ensure_enum_types
 from .utils.audit_logger import ensure_request_id, get_client_ip_from_request, get_audit_logger
 from .utils.logging_config import setup_logging
 from .utils.security import validate_security_config
@@ -43,6 +47,15 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+EVIDENCE_ROOT = Path(
+    os.getenv(
+        "EVIDENCE_STORAGE_ROOT",
+        str(Path.cwd() / "storage" / "evidence"),
+    )
+)
+EVIDENCE_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/storage/evidence", StaticFiles(directory=EVIDENCE_ROOT), name="evidence")
 
 logger = logging.getLogger("visionsafe.backend")
 
@@ -92,9 +105,14 @@ def startup() -> None:
     init_sentry(environment="production" if not settings.DEBUG else "development")
     get_audit_logger()
     validate_security_config()
-    ensure_alert_lifecycle_schema(engine)
-    # Create all tables; Alembic migrations handle schema upgrades.
+    # Three-step schema bootstrap. Order matters on a fresh PG volume:
+    #   1. enums — ORM columns are declared create_type=False, so create_all
+    #      cannot materialize the PG enum types itself.
+    #   2. tables — every table references at least one of those enums.
+    #   3. additive ALTERs — backfills new columns / values on older DBs.
+    ensure_enum_types(engine)
     Base.metadata.create_all(bind=engine)
+    ensure_alert_lifecycle_schema(engine)
     if settings.SEED_DATA:
         seed()
     else:
@@ -124,6 +142,7 @@ def _register_routes() -> None:
         ergonomics_router,
         config_router,
         notifications_router,
+        safety_zones_router,
         edge_config_router,
         ingest_router,  # internal: edge AI → backend, no auth
     ]

@@ -1,0 +1,33 @@
+%%{init: {'theme': 'default', 'architecture': {'padding': 20}}}%%
+%% C4
+%% Cloud Provider: Azure
+%%
+%% ARCHITECTURE PROMPT:
+%% c4 model
+%%
+%% AI INSTRUCTIONS: Complete this architecture diagram based on the prompt above.
+%% Rules:
+%%   1. Use 'architecture-beta' syntax (Mermaid v11+)
+%%   2. Icons use Iconify format: service name(iconset:icon-name)[Label]
+%%   3. Group services with: group name(iconset:icon)[Label]
+%%   4. Labels in [] must be plain text — no special chars
+%%   5. Use --> for sync flows, -.-> for async/optional
+%%
+%% AZURE ICONIFY ICONS (verified — use inside parentheses):
+%% devicon:azure             logos:google-cloud        logos:aws
+%% mdi:server                mdi:database              mdi:cloud
+%% mdi:api                   mdi:shield-lock           mdi:key-variant
+%% mdi:message-processing    mdi:memory                mdi:chart-line
+%% Note: Use mdi: icons for Azure services — no dedicated Azure icon set in Iconify
+
+architecture-beta
+    group external(internet)[External]
+    group backend(server)[Backend]
+    group data(database)[Data Layer]
+
+    service user(mdi:account)[User] in external
+    service api(server)[API Gateway] in backend
+    service db(database)[Database] in data
+
+    user:R --> L:api
+    api:R --> L:db

@@ -1,54 +1,66 @@
-build:
-	docker compose up --build -d --remove-orphans
+.PHONY: build up check-gpu down down-v rebuild config
 
-up:
-	docker compose up -d
+# Always target the system Docker daemon. Docker Desktop on Linux runs in a VM
+# and cannot pass through the host NVIDIA GPU.
+DOCKER = docker --context default
+COMPOSE = $(DOCKER) compose
+
+build: check-gpu
+	$(COMPOSE) up --build -d --remove-orphans
+
+up: check-gpu
+	$(COMPOSE) up -d
+
+check-gpu:
+	@command -v nvidia-smi >/dev/null 2>&1 || { echo "⚠ NVIDIA driver not found – worker will fall back to CPU."; }
+	@$(DOCKER) info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"' || { echo "⚠ NVIDIA runtime not registered in Docker – worker will fall back to CPU."; }
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 down-v:
-	docker compose down -v
+	$(COMPOSE) down -v
 
-rebuild:
-	docker compose build --no-cache
-	docker compose up -d --remove-orphans
+rebuild: check-gpu
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up -d --remove-orphans
 
-nextgen-config:
-	docker compose config
+config:
+	$(COMPOSE) config
 
 makemigrations:
-	docker compose exec -it api alembic revision --autogenerate -m "$(name)"
+	$(COMPOSE) exec -it api alembic revision --autogenerate -m "$(name)"
 
 migrate:
-	docker compose exec -it api alembic upgrade head
+	$(COMPOSE) exec -it api alembic upgrade head
 
 history:
-	docker compose exec -it api alembic history
+	$(COMPOSE) exec -it api alembic history
 
 current-migration:
-	docker compose exec -it api alembic current
+	$(COMPOSE) exec -it api alembic current
 
 downgrade:
-	docker compose exec -it api alembic downgrade $(version)
+	$(COMPOSE) exec -it api alembic downgrade $(version)
 
 inspect-network:
-	docker network inspect nextgen_local_nw
+	$(DOCKER) network inspect visionsafe360_internal
 
 psql:
-	docker compose exec -it postgres psql -U fayedolla -d nextgen
+	$(COMPOSE) exec -it db psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-visionsafe360}
 
 logs:
-	docker compose logs -f api
+	$(COMPOSE) logs -f
 
 db-clear-alembic:
-	docker compose exec postgres psql -U fayedolla -d nextgen -c "DELETE FROM alembic_version;"
+	$(COMPOSE) exec db psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-visionsafe360} -c "DELETE FROM alembic_version;"
 
 check-models:
-	docker compose exec api python -c "from backend.app.core.model_registry import load_models; from sqlmodel import SQLModel; load_models(); print(SQLModel.metadata.tables.keys())"
+	$(COMPOSE) exec backend python -c "from backend.app.core.model_registry import load_models; from sqlmodel import SQLModel; load_models(); print(SQLModel.metadata.tables.keys())"
 
 shell:
-	docker compose exec -it api bash
+	$(COMPOSE) exec -it backend bash
 
 exp-req:
 	uv export --format requirements-txt --no-hashes > backend/requirements.txt
+

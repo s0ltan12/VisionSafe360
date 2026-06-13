@@ -152,8 +152,6 @@ def draw_hud(
 ) -> np.ndarray:
     """Draw a small heads-up-display in the top-left corner.
 
-    When *calibrated* is False, show a prominent warning that proximity
-    distances are pixel-only and not trustworthy.
     """
     lines = [
         f"FPS: {fps:.1f}",
@@ -173,12 +171,5 @@ def draw_hud(
             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1, cv2.LINE_AA,
         )
         y += 22
-
-    if not calibrated:
-        warn = "UNCALIBRATED: PX MODE"
-        cv2.putText(
-            frame, warn, (10, y + 6),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA,
-        )
 
     return frame

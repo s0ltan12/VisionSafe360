@@ -8,6 +8,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class AlertBase(BaseModel):
+    incident_id: Optional[str] = None
     type: str
     severity: str
     zone: str
@@ -28,6 +29,13 @@ class AlertBase(BaseModel):
     status: str = "New"
     description: str
     thumbnail: Optional[str] = None
+    event_frame: Optional[str] = None
+    video_evidence: Optional[str] = None
+    track_id: Optional[int] = None
+    frame_number: Optional[int] = None
+    frame_width: Optional[int] = None
+    frame_height: Optional[int] = None
+    evidence_kind: Optional[str] = None
     confidence: Optional[float] = None
     acknowledged_by: Optional[str] = None
     acknowledged_by_id: Optional[str] = None

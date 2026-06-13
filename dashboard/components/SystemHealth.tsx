@@ -26,13 +26,18 @@ const statusTone = (status: string) => {
   return 'danger';
 };
 
-const MetricCard = ({ icon, label, value, detail }: { icon: React.ReactNode; label: string; value: string; detail: string }) => (
-  <Panel className="flex items-center gap-4">
-    <div className="text-vs-orange">{icon}</div>
+const MetricCard = ({ icon, label, value, detail, tone = 'neutral' }: { icon: React.ReactNode; label: string; value: string; detail: string; tone?: 'neutral' | 'warning' | 'danger' }) => (
+  <Panel className={`flex items-center gap-4 ${tone === 'danger' ? 'border-red-500/40 bg-red-950/20' : tone === 'warning' ? 'border-vs-orange/40 bg-vs-orange/10' : ''}`}>
+    <div className={tone === 'danger' ? 'text-red-400' : tone === 'warning' ? 'text-vs-orange' : 'text-vs-orange'}>{icon}</div>
     <div className="min-w-0">
       <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">{label}</p>
       <p className="text-xl font-bold text-white truncate">{value}</p>
       <p className="text-[10px] text-zinc-600 font-mono truncate">{detail}</p>
+      {tone !== 'neutral' && (
+        <p className={`mt-1 text-[10px] font-bold uppercase tracking-wider ${tone === 'danger' ? 'text-red-300' : 'text-vs-orange'}`}>
+          {tone === 'danger' ? 'Critical capacity' : 'Capacity warning'}
+        </p>
+      )}
     </div>
   </Panel>
 );
@@ -145,6 +150,8 @@ const SystemHealth = () => {
   }, [loadHealth]);
 
   const summary = snapshot?.summary;
+  const diskUsedPercent = summary?.diskUsedPercent ?? 0;
+  const storageTone = diskUsedPercent >= 95 ? 'danger' : diskUsedPercent >= 85 ? 'warning' : 'neutral';
   const serviceRows = useMemo(() => (summary ? [
     { name: 'Backend API', status: summary.backend, detail: `${summary.dbLatencyMs ?? 0} ms DB ping` },
     { name: 'Database', status: summary.database, detail: `${summary.onlineCameras}/${summary.totalCameras} cameras online` },
@@ -169,10 +176,10 @@ const SystemHealth = () => {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard icon={<Cpu size={24} />} label="CPU Load" value={`${(summary?.cpuLoadPercent ?? 0).toFixed(1)}%`} detail={`1m load ${summary?.loadAverage1m ?? 0}`} />
-        <MetricCard icon={<HardDrive size={24} />} label="Storage Used" value={`${(summary?.diskUsedPercent ?? 0).toFixed(1)}%`} detail={`${formatBytes(summary?.diskUsedBytes ?? 0)} / ${formatBytes(summary?.diskTotalBytes ?? 0)}`} />
-        <MetricCard icon={<Activity size={24} />} label="Global FPS" value={`${(summary?.globalFps ?? 0).toFixed(1)} fps`} detail={`${summary?.onlineCameras ?? 0}/${summary?.totalCameras ?? 0} cameras online`} />
-        <MetricCard icon={<Wifi size={24} />} label="Event Flow" value={`${summary?.incidentsLast60s ?? 0}/min`} detail={`${summary?.activeWorkers ?? 0} workers · ${summary?.activeJobs ?? 0} jobs`} />
+        <MetricCard icon={<Cpu size={24} />} label={t('cpuLoad')} value={`${(summary?.cpuLoadPercent ?? 0).toFixed(1)}%`} detail={`1m load ${summary?.loadAverage1m ?? 0}`} />
+        <MetricCard icon={<HardDrive size={24} />} label={t('storageUsed')} value={`${diskUsedPercent.toFixed(1)}%`} detail={`${formatBytes(summary?.diskUsedBytes ?? 0)} / ${formatBytes(summary?.diskTotalBytes ?? 0)}`} tone={storageTone} />
+        <MetricCard icon={<Activity size={24} />} label={t('globalFps')} value={`${(summary?.globalFps ?? 0).toFixed(1)} fps`} detail={`${summary?.onlineCameras ?? 0}/${summary?.totalCameras ?? 0} cameras online`} />
+        <MetricCard icon={<Wifi size={24} />} label={t('eventFlow')} value={`${summary?.incidentsLast60s ?? 0}/min`} detail={`${summary?.activeWorkers ?? 0} workers · ${summary?.activeJobs ?? 0} jobs`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 50
     MAX_PAGE_SIZE: int = 200
 
+    # ── SLA thresholds (seconds) ─────────────────────────────────────
+    SLA_ACK_CRITICAL_SECONDS: int = 120
+    SLA_ACK_HIGH_SECONDS: int = 300
+    SLA_ACK_MEDIUM_SECONDS: int = 900
+    SLA_ACK_LOW_SECONDS: int = 1800
+    SLA_RESOLVE_CRITICAL_SECONDS: int = 900
+    SLA_RESOLVE_HIGH_SECONDS: int = 1800
+    SLA_RESOLVE_MEDIUM_SECONDS: int = 3600
+    SLA_RESOLVE_LOW_SECONDS: int = 7200
+
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def parse_allowed_origins(cls, v) -> List[str]:
