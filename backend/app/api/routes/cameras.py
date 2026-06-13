@@ -10,7 +10,7 @@ from ...config.database import get_db
 from ...schemas import CameraCreate, CameraOut, CameraUpdate
 from ...services.camera_service import CameraService
 from ...services.job_service import job_service
-from ...utils.media import stream_upload_to_videos_dir
+from ...utils.media import generate_thumbnail, stream_upload_to_videos_dir
 from ...utils.permissions import require_roles
 
 router = APIRouter(
@@ -67,6 +67,11 @@ async def upload_and_create_camera(
     finally:
         await file.close()
 
+    # Best-effort first-frame extraction; failures don't block camera creation.
+    thumb_url = None
+    if generate_thumbnail(safe_name) is not None:
+        thumb_url = f"/api/media/thumbnails/{safe_name}"
+
     payload = CameraCreate(
         name=name,
         zone=zone,
@@ -78,6 +83,7 @@ async def upload_and_create_camera(
         status="Online",
         fps=0,
         health=100,
+        thumbnail=thumb_url,
     )
     return CameraService.create(db, payload)
 

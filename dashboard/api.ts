@@ -136,7 +136,7 @@ function toFrontendCamera(c: any): Camera {
     deviceIndex:   c.device_index ?? c.deviceIndex ?? null,
     status:        c.status,
     isPrivacyMode: c.is_privacy_mode,
-    thumbnail:     c.thumbnail,
+    thumbnail:     toAssetUrl(c.thumbnail) ?? '',
     fps:           c.fps,
     health:        c.health,
   };
@@ -259,6 +259,9 @@ function toAssetUrl(value: string | null | undefined): string | null {
   const evidenceIndex = value.indexOf(evidencePath);
   if (evidenceIndex >= 0) {
     return appendQueryParam(`${BASE_URL}${value.slice(evidenceIndex)}`, 'ev', EVIDENCE_ASSET_VERSION);
+  }
+  if (value.startsWith('/api/media/thumbnails/')) {
+    return appendAuthToken(`${BASE_URL}${value}`);
   }
   return value;
 }
@@ -832,6 +835,7 @@ export const CamerasAPI = {
         streamUrl,
         sourceType,
         type: sourceType === 'file' ? 'upload' : undefined,
+        thumbnail: cam.thumbnail || undefined,
       };
     });
   },

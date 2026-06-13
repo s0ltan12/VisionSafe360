@@ -212,6 +212,7 @@ export interface DemoVideo {
   streamUrl: string;
   sourceType?: CameraSourceType;
   cameraId?: string;
+  thumbnail?: string;
 }
 
 export interface JobStatus {
