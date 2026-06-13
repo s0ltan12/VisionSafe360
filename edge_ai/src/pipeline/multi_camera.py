@@ -18,6 +18,7 @@ from ..config.settings import (
     BACKEND_EVENTS_ENABLED,
     BACKEND_WORKER_GPU_ID,
     BACKEND_WORKER_ID,
+    EVIDENCE_CLIP_ENABLED,
     OFFLINE_FLUSH_INTERVAL_SEC,
     OFFLINE_FLUSH_MAX_PER_CYCLE,
     OFFLINE_SHUTDOWN_FLUSH_LIMIT,
@@ -38,6 +39,7 @@ from ..analysis.calibration import CalibrationManager
 from ..analysis.track_quality import TrackQualityMonitor
 from ..alerts.alert_manager import AlertManager
 from ..alerts.fcm_service import FCMService
+from ..alerts.frame_ring_buffer import FrameRingBuffer
 from ..alerts.siren_controller import SirenController
 from ..integration.backend_client import BackendClient
 from ..utils.logger import MetricsLogger
@@ -82,7 +84,7 @@ def _build_multi_camera_context(
         )
 
     posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
-    proximity_analyzer = ProximityAnalyzer() if proximity_enabled else None
+    proximity_analyzer = ProximityAnalyzer(calibration_mgr=calibration_mgr) if proximity_enabled else None
     ppe_analyzer = PPEAnalyzer() if ppe_enabled else None
 
     person_tracker_source = profile.person_tracker_source
@@ -99,6 +101,8 @@ def _build_multi_camera_context(
 
     win_name = f"VisionSafe360 - {cam_id}"
     out_path = OUTPUT_DIR / f"{cam_id}_output.mp4" if not show else None
+
+    frame_ring_buffer = FrameRingBuffer() if EVIDENCE_CLIP_ENABLED else None
 
     return PipelineContext(
         stream=stream,
@@ -120,6 +124,7 @@ def _build_multi_camera_context(
         worker_id=BACKEND_WORKER_ID or None,
         worker_gpu_id=BACKEND_WORKER_GPU_ID or None,
         alert_manager=alert_manager,     # shared
+        frame_ring_buffer=frame_ring_buffer,
         siren_controller=siren_controller,  # shared
         renderer=renderer,
         is_calibrated=is_calibrated,
@@ -192,6 +197,10 @@ def run_multi_camera_pipeline(
         backend_client=backend_client,
         fcm_service=fcm_service,
         siren_controller=siren_controller,
+    )
+    logger.info(
+        "evidence_clip pipeline configured: enabled=%s ring_buffer_per_camera=True",
+        EVIDENCE_CLIP_ENABLED,
     )
 
     # ── Per-camera contexts (reusing PipelineContext) ────────────────

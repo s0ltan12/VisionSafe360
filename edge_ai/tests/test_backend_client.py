@@ -1,4 +1,5 @@
 """Unit tests for BackendClient reliability behavior."""
+import hashlib
 import sys
 from pathlib import Path
 
@@ -134,3 +135,29 @@ def test_numpy_metadata_is_json_safe(tmp_path: Path) -> None:
 	result = client.submit_incident(event)
 	assert result == BackendDeliveryResult.FAILED
 	assert client.offline_queue_size() == 1
+
+
+def test_composite_payload_uses_deterministic_correlation_incident_id() -> None:
+	correlation_id = "cam_01:worker:7:forklift:101:COMPOSITE_PPE_FORKLIFT_RISK"
+	event = HazardEvent(
+		event_type="COMPOSITE_PPE_FORKLIFT_RISK",
+		severity=Severity.CRITICAL,
+		camera_id="cam_01",
+		timestamp=100.0,
+		frame_number=10,
+		track_id=7,
+		description="ppe and forklift risk",
+		metadata={
+			"composite": True,
+			"correlation_id": correlation_id,
+			"worker_track_id": 7,
+			"forklift_track_id": 101,
+		},
+	)
+
+	payload = BackendClient._event_to_payload(event)
+
+	digest = hashlib.sha1(correlation_id.encode("utf-8")).hexdigest()[:16]
+	assert payload["id"] == f"INC-COMP-{digest}"
+	assert payload["metadata"]["correlation_id"] == correlation_id
+	assert payload["metadata"]["event_type"] == "COMPOSITE_PPE_FORKLIFT_RISK"

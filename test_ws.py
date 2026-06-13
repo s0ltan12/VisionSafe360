@@ -1,7 +1,9 @@
 import asyncio
 import websockets
-import json
+import pytest
 
+
+@pytest.mark.anyio
 async def test_ws_no_token():
     uri = "ws://127.0.0.1:8000/ws/incidents"
     try:
@@ -15,4 +17,6 @@ async def test_ws_no_token():
     except Exception as e:
         print(f"Connection failed: {e}")
 
-asyncio.run(test_ws_no_token())
+
+if __name__ == "__main__":
+    asyncio.run(test_ws_no_token())

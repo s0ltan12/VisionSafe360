@@ -22,10 +22,11 @@ const COLORS = ['#FF6A00', '#FF8A3A', '#3b82f6', '#4b5563', '#10b981', '#ef4444'
 
 const formatTrend = (current: number, previous: number) => {
   if (previous === 0) {
-    return current > 0 ? `+${current}` : '0';
+    return current > 0 ? 'New' : '0';
   }
   const change = ((current - previous) / previous) * 100;
   if (Math.abs(change) < 0.1) return '0%';
+  if (Math.abs(change) > 999) return change > 0 ? '+999%+' : '-999%+';
   return `${change > 0 ? '+' : ''}${change.toFixed(1)}%`;
 };
 
@@ -173,14 +174,14 @@ const Reports = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard
-          label="Total Incidents"
+          label={t('totalIncidents')}
           value={loading ? '...' : String(stats?.totalIncidents ?? 0)}
           trend={stats ? formatTrend(stats.incidentsLast7Days, stats.incidentsPrevious7Days) : undefined}
           icon={ShieldAlert}
         />
-        <KPICard label="Safety Score" value={loading ? '...' : `${(stats?.safetyScore ?? 0).toFixed(1)}%`} icon={UserCheck} />
-        <KPICard label="Falls Detected" value={loading ? '...' : String(stats?.fallsDetected ?? 0)} icon={Activity} />
-        <KPICard label="Active Alerts" value={loading ? '...' : String(stats?.activeAlerts ?? 0)} icon={ShieldAlert} />
+        <KPICard label={t('safetyScore')} value={loading ? '...' : `${(stats?.safetyScore ?? 0).toFixed(1)}%`} icon={UserCheck} />
+        <KPICard label={t('fallsDetected')} value={loading ? '...' : String(stats?.fallsDetected ?? 0)} icon={Activity} />
+        <KPICard label={t('activeAlerts')} value={loading ? '...' : String(stats?.activeAlerts ?? 0)} icon={ShieldAlert} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

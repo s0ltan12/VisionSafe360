@@ -4,10 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..models import Alert, Camera, ErgonomicRecord, HazardTypeEnum, Incident, StatusEnum, User
+from ..models import Alert, Camera, ErgonomicRecord, HazardTypeEnum, Incident, SeverityEnum, StatusEnum, User
+from .sla_service import SLAService
 
 
 class AnalyticsService:
@@ -31,6 +32,11 @@ class AnalyticsService:
         ).count()
 
         trends = AnalyticsService.get_incidents_time_series(db, days=7)
+        avg_resolution_time = AnalyticsService.get_avg_resolution_time(db)
+        top_dangerous_zones = AnalyticsService.get_top_dangerous_zones(db, limit=5)
+        recurring_hazards = AnalyticsService.get_recurring_hazards(db, limit=5)
+        weekly_summary = AnalyticsService.get_weekly_summary(db)
+        sla_summary = SLAService.get_summary(db)
         safety_score = AnalyticsService._calculate_safety_score(
             active_alerts=active_alerts,
             total_incidents=total_incidents,
@@ -52,6 +58,13 @@ class AnalyticsService:
             "incidents_last_7_days": incidents_last_7_days,
             "incidents_previous_7_days": incidents_previous_7_days,
             "trends": trends,
+            "avg_resolution_time_seconds": avg_resolution_time,
+            "top_dangerous_zones": top_dangerous_zones,
+            "recurring_hazards": recurring_hazards,
+            "weekly_summary": weekly_summary,
+            "sla_breach_count": sla_summary["sla_breach_count"],
+            "sla_breach_rate": sla_summary["sla_breach_rate"],
+            "avg_response_time_seconds": sla_summary["avg_response_time_seconds"],
         }
 
     @staticmethod
@@ -63,9 +76,11 @@ class AnalyticsService:
         total_cameras: int,
     ) -> float:
         camera_health = (online_cameras / total_cameras) if total_cameras else 1.0
-        alert_penalty = min(active_alerts * 3.0, 45.0)
-        incident_penalty = min(total_incidents * 0.2, 35.0)
-        score = (camera_health * 100.0) - alert_penalty - incident_penalty
+        offline_penalty = (1.0 - camera_health) * 25.0
+        alert_penalty = min(active_alerts * 2.0, 30.0)
+        # Historical volume should not force the current safety score to zero.
+        incident_penalty = min(total_incidents * 0.05, 15.0)
+        score = 100.0 - offline_penalty - alert_penalty - incident_penalty
         return round(max(0.0, min(100.0, score)), 1)
 
     @staticmethod
@@ -127,6 +142,85 @@ class AnalyticsService:
             func.count(Incident.id).label("count"),
         ).group_by(Incident.zone).order_by(func.count(Incident.id).desc()).limit(limit).all()
         return [{"zone": row.zone, "count": row.count} for row in rows]
+
+    @staticmethod
+    def get_avg_resolution_time(db: Session) -> float:
+        avg_seconds = (
+            db.query(func.avg(Incident.duration_seconds))
+            .filter(Incident.duration_seconds.isnot(None))
+            .scalar()
+        )
+        return round(float(avg_seconds or 0.0), 1)
+
+    @staticmethod
+    def get_recurring_hazards(db: Session, limit: int = 10) -> list[dict]:
+        rows = (
+            db.query(
+                Incident.zone.label("zone"),
+                Incident.classification.label("classification"),
+                func.count(Incident.id).label("count"),
+            )
+            .group_by(Incident.zone, Incident.classification)
+            .having(func.count(Incident.id) > 1)
+            .order_by(func.count(Incident.id).desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "zone": row.zone,
+                "classification": row.classification,
+                "count": row.count,
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def get_top_dangerous_zones(db: Session, limit: int = 10) -> list[dict]:
+        severity_weight = case(
+            (Incident.severity == SeverityEnum.Critical, 4),
+            (Incident.severity == SeverityEnum.High, 3),
+            (Incident.severity == SeverityEnum.Medium, 2),
+            else_=1,
+        )
+        risk_score = func.sum(severity_weight)
+        rows = (
+            db.query(
+                Incident.zone.label("zone"),
+                func.count(Incident.id).label("incident_count"),
+                risk_score.label("risk_score"),
+            )
+            .group_by(Incident.zone)
+            .order_by(risk_score.desc(), func.count(Incident.id).desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "zone": row.zone,
+                "incident_count": int(row.incident_count or 0),
+                "risk_score": int(row.risk_score or 0),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def get_weekly_summary(db: Session) -> dict:
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+        previous_start = now - timedelta(days=14)
+        current = db.query(Incident).filter(Incident.created_at >= week_start).count()
+        previous = db.query(Incident).filter(
+            Incident.created_at >= previous_start,
+            Incident.created_at < week_start,
+        ).count()
+        resolved = db.query(Incident).filter(Incident.resolved_at >= week_start).count()
+        return {
+            "incidents": current,
+            "previous_incidents": previous,
+            "resolved": resolved,
+            "delta": current - previous,
+        }
 
     @staticmethod
     def get_ergonomic_trend(db: Session, days: int = 7) -> list[dict]:

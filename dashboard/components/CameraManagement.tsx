@@ -2,11 +2,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Camera, Activity, Trash2, Edit2, CheckCircle2, X,
-  Play, Square, Wifi, WifiOff, Link, Loader2, Radio,
+  Play, Square, Wifi, WifiOff, Link, Loader2, Radio, Map,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { CamerasAPI } from '../api';
 import { Camera as CameraType } from '../types';
+import CameraZoneManager from './CameraZoneManager';
 
 type StreamState = 'idle' | 'starting' | 'streaming' | 'stopping' | 'error';
 
@@ -32,6 +33,7 @@ const CameraManagement = () => {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [cardStates, setCardStates] = useState<Record<string, CameraCardState>>({});
+  const [zoneCamera, setZoneCamera] = useState<CameraType | null>(null);
 
   const fetchCameras = useCallback(async () => {
     try {
@@ -167,6 +169,10 @@ const CameraManagement = () => {
     }
   };
 
+  if (zoneCamera) {
+    return <CameraZoneManager camera={zoneCamera} onClose={() => setZoneCamera(null)} />;
+  }
+
   return (
     <div className="p-6 space-y-6 h-full overflow-y-auto">
       <div className="flex justify-between items-center">
@@ -284,7 +290,7 @@ const CameraManagement = () => {
                   </div>
 
                   {/* Stream Controls */}
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
                     {cs.streamState === 'streaming' ? (
                       <button
                         onClick={() => handleStopStream(cam)}
@@ -317,6 +323,15 @@ const CameraManagement = () => {
                       <Trash2 size={14} />
                     </button>
                   </div>
+
+                  <button
+                    className="w-full flex items-center justify-center gap-2 py-2 bg-vs-orange/10 border border-vs-orange/30 text-vs-orange rounded-lg text-xs font-bold hover:bg-vs-orange/20 transition-colors"
+                    onClick={() => setZoneCamera(cam)}
+                    title="Manage Safety Zones"
+                  >
+                    <Map size={14} />
+                    Manage Safety Zones
+                  </button>
 
                   {/* Stream state badge (below controls) */}
                   <div className="flex items-center justify-between text-[10px] text-zinc-600">

@@ -47,17 +47,29 @@ const severityStyle: Record<string, string> = {
 	Low: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
 };
 
+const isOverspeedIncident = (payload: any) =>
+	/overspeed/i.test([
+		payload?.classification,
+		payload?.root_cause,
+		payload?.rootCause,
+		payload?.description,
+		payload?.type,
+	].map(value => String(value ?? '')).join(' '));
+
 const normalizeIncident = (payload: any): Incident => ({
 	id: String(payload?.id ?? `INC-${Date.now()}`),
 	zone: String(payload?.zone ?? 'Unknown zone'),
-	classification: String(payload?.classification ?? 'Unclassified'),
-	severity: payload?.severity === 'High' || payload?.severity === 'Medium' || payload?.severity === 'Low'
+	classification: isOverspeedIncident(payload)
+		? 'Forklift Overspeed'
+		: String(payload?.classification ?? 'Unclassified'),
+	severity: payload?.severity === 'Critical' || payload?.severity === 'High' || payload?.severity === 'Medium' || payload?.severity === 'Low'
 		? payload.severity
 		: 'Low',
 	cameraId: payload?.camera_id ?? payload?.cameraId ?? null,
 	cameraName: payload?.camera_name ?? payload?.cameraName ?? null,
 	workerId: payload?.worker_id ?? payload?.workerId ?? null,
 	workerGpuId: payload?.worker_gpu_id ?? payload?.workerGpuId ?? null,
+	status: payload?.status ?? 'New',
 	rootCause: String(payload?.root_cause ?? payload?.rootCause ?? 'Under Investigation'),
 	correctiveAction: String(payload?.corrective_action ?? payload?.correctiveAction ?? 'Pending Review'),
 	createdAt: String(payload?.created_at ?? payload?.createdAt ?? new Date().toISOString()),
@@ -434,7 +446,7 @@ const LiveMonitoring = () => {
 	const loadIncidents = useCallback(async (options: RequestInit = {}) => {
 		setIsRefreshingIncidents(true);
 		try {
-			const data = await IncidentsAPI.getAll(options);
+			const data = await IncidentsAPI.getAll(options, 'active');
 			setIncidents(data.map(normalizeIncident));
 			setLastUpdated(new Date().toLocaleTimeString());
 			setDataError(null);

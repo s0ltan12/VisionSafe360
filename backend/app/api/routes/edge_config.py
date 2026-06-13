@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ...config.database import get_db
 from ...models import SystemConfig
 from ...schemas import SystemConfigOut
+from ...services.safety_zone_service import SafetyZoneService
 from ...utils.permissions import require_roles
 
 router = APIRouter(
@@ -68,3 +69,9 @@ def update_edge_config(key: str, value: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.get("/cameras/{camera_id}/safety-zones")
+def get_camera_safety_zones_for_edge(camera_id: str, db: Session = Depends(get_db)):
+    """Return enabled polygon geofences for one edge camera worker."""
+    return SafetyZoneService.edge_config(db, camera_id)

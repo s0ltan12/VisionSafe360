@@ -1,0 +1,28 @@
+{
+  "camera_zones": {
+    "cam_01": "zone_a",
+    "CAM-01": "zone_a"
+  },
+  "zones": {
+    "zone_a": {
+      "type": "forklift_area",
+      "risk_level": "HIGH",
+      "display_name": "Loading Bay A"
+    },
+    "zone_b": {
+      "type": "assembly_line",
+      "risk_level": "MEDIUM",
+      "display_name": "Assembly Line B"
+    },
+    "zone_c": {
+      "type": "welding_cell",
+      "risk_level": "HIGH",
+      "display_name": "Welding Cell C"
+    },
+    "zone_d": {
+      "type": "packing_area",
+      "risk_level": "LOW",
+      "display_name": "Packing Area D"
+    }
+  }
+}

@@ -1,12 +1,78 @@
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
 export type Status = 'New' | 'Notified' | 'Acknowledged' | 'In Investigation' | 'Resolved' | 'Archived' | 'False Positive' | 'Dismissed' | 'Active';
-export type HazardType = 'PPE' | 'Fall' | 'Proximity' | 'Ergonomics' | 'Intrusion';
+export type IncidentStatus = 'New' | 'Validating' | 'Active' | 'Acknowledged' | 'Resolved' | 'False Positive' | 'Archived';
+export type HazardType = 'PPE' | 'Fall' | 'Proximity' | 'Overspeed' | 'Ergonomics' | 'Intrusion';
 export type UserRole = 'Admin' | 'Safety Engineer' | 'Data Analyst';
 export type ErgonomicRiskLevel = 'Low' | 'Medium' | 'High' | 'Critical';
+export type SafetyZoneType = 'danger' | 'restricted' | 'forklift_only' | 'pedestrian_only' | 'no_entry' | 'loading' | 'emergency_exit' | 'custom';
+
+export interface ZonePoint {
+  x: number;
+  y: number;
+}
+
+export interface SafetyZoneRule {
+  allowedClasses: Array<'person' | 'forklift'>;
+  deniedClasses: Array<'person' | 'forklift'>;
+  occupancyThreshold?: number | null;
+  dwellTimeLimitSec?: number | null;
+  cooldownSec: number;
+  minPersistenceSec: number;
+  severity: Severity;
+}
+
+export interface CameraSafetyZone {
+  id: string;
+  cameraId: string;
+  name: string;
+  zoneType: SafetyZoneType;
+  polygon: ZonePoint[];
+  coordinateSpace: string;
+  sourceWidth: number;
+  sourceHeight: number;
+  color: string;
+  enabled: boolean;
+  priority: number;
+  rules: SafetyZoneRule;
+  description?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface SafetyZoneEvent {
+  id: string;
+  zoneId: string;
+  cameraId: string;
+  eventType: string;
+  objectClass: string;
+  trackId?: number | null;
+  stableObjectKey: string;
+  severity: Severity;
+  occurredAt: string;
+  durationInsideSec?: number | null;
+  occupancyCount?: number | null;
+  frameNumber?: number | null;
+  bbox?: unknown;
+  anchorPoint?: unknown;
+  metadata?: Record<string, unknown> | null;
+  alertId?: string | null;
+}
+
+export interface SafetyZoneStats {
+  zoneId: string;
+  cameraId: string;
+  eventCount: number;
+  violationCount: number;
+  currentOccupancy: number;
+  avgDwellTimeSec: number;
+  maxDwellTimeSec: number;
+  lastEventAt?: string | null;
+}
 
 export interface Alert {
   id: string;
+  incidentId?: string | null;
   type: HazardType;
   severity: Severity;
   zone: string;
@@ -24,7 +90,10 @@ export interface Alert {
   status: Status;
   description: string;
   thumbnail?: string | null;
+  eventFrame?: string | null;
+  videoEvidence?: string | null;
   confidence?: number | null;
+  trackId?: number | null;
   frameNumber?: number | null;
   frameWidth?: number | null;
   frameHeight?: number | null;
@@ -53,6 +122,30 @@ export interface AlertEvent {
   actorName?: string | null;
   note?: string | null;
   metadata?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface IncidentEvent {
+  id: string;
+  incidentId: string;
+  action: string;
+  previousStatus?: string | null;
+  newStatus?: string | null;
+  actorId?: string | null;
+  actorName?: string | null;
+  note?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface NotificationRecord {
+  id: string;
+  userId?: string | null;
+  title: string;
+  message: string;
+  type: 'info' | 'alert' | 'system' | string;
+  isRead: boolean;
+  source?: string | null;
   createdAt: string;
 }
 
@@ -85,6 +178,20 @@ export interface Incident {
   cameraName?: string | null;
   workerId?: string | null;
   workerGpuId?: string | null;
+  status: IncidentStatus;
+  startedAt?: string | null;
+  validatedAt?: string | null;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+  archivedAt?: string | null;
+  slaBreachedAt?: string | null;
+  slaAckBreachedAt?: string | null;
+  slaResolutionBreachedAt?: string | null;
+  slaBreachCount?: number;
+  durationSeconds?: number | null;
+  escalationCount?: number;
   rootCause: string;
   correctiveAction: string;
   createdAt: string;
@@ -167,6 +274,18 @@ export interface AnalyticsStats {
   safetyScore: number;
   incidentsLast7Days: number;
   incidentsPrevious7Days: number;
+  avgResolutionTimeSeconds: number;
+  slaBreachCount: number;
+  slaBreachRate: number;
+  avgResponseTimeSeconds: number;
+  topDangerousZones: Array<{ zone: string; incidentCount: number; riskScore: number }>;
+  recurringHazards: Array<{ zone: string; classification: string; count: number }>;
+  weeklySummary?: {
+    incidents: number;
+    previousIncidents: number;
+    resolved: number;
+    delta: number;
+  };
 }
 
 export interface AnalyticsTimeSeriesPoint {

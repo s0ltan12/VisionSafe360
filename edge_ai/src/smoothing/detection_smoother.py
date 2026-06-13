@@ -46,11 +46,16 @@ class DetectionSmoother:
             if best_tid is not None:
                 det.track_id = best_tid
 
-        current_ids = {d.track_id for d in detections if d.track_id is not None}
+        current_ids = {
+            d.track_id for d in detections
+            if d.class_name == "person" and d.track_id is not None
+        }
 
-        # Update cache with current detections
+        # Update cache with current person detections only.  Forklifts have a
+        # dedicated hold smoother and tracker; caching them here can duplicate
+        # boxes as generic track ghosts.
         for det in detections:
-            if det.track_id is not None:
+            if det.class_name == "person" and det.track_id is not None:
                 self._cache[det.track_id] = (det, 0)
 
         # --- Phase 2: inject ghosts for fully missing tracks ---

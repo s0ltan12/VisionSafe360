@@ -58,10 +58,10 @@ def vertical_angle(a: np.ndarray, b: np.ndarray):
 
 
 # ── confidence check ───────────────────────────────────────────────
-def _get_kp(keypoints, name, confs):
+def _get_kp(keypoints, name, confs, confidence_threshold=CONFIDENCE_THRESHOLD):
     """Returns (x, y) for a keypoint only if confidence >= threshold."""
     idx = KP[name]
-    if confs[idx] < CONFIDENCE_THRESHOLD:
+    if confs[idx] < confidence_threshold:
         return None
     return np.array(keypoints[idx][:2], dtype=float)
 
@@ -73,7 +73,7 @@ def _midpoint(p1, p2):
 
 
 # ── main angle extraction ─────────────────────────────────────────
-def compute_angles(keypoints, confs, side="left"):
+def compute_angles(keypoints, confs, side="left", confidence_threshold=CONFIDENCE_THRESHOLD):
     """
     Extracts 7 body angles from one person's COCO-17 keypoints.
 
@@ -82,12 +82,16 @@ def compute_angles(keypoints, confs, side="left"):
     keypoints : array-like, shape (17, 2) — [x, y] per keypoint
     confs     : array-like, shape (17,)   — confidence per keypoint
     side      : "left" or "right" — which arm for RULA upper-limb group
+    confidence_threshold : minimum keypoint confidence accepted for angle input
 
     Returns
     -------
     dict {angle_name: degrees_or_None}
     """
-    g = lambda name: _get_kp(keypoints, name, confs)
+    if side not in {"left", "right"}:
+        raise ValueError("side must be 'left' or 'right'")
+
+    g = lambda name: _get_kp(keypoints, name, confs, confidence_threshold)
 
     shoulder = g(f"{side}_shoulder")
     elbow = g(f"{side}_elbow")

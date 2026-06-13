@@ -12,13 +12,26 @@ from ...models import User
 from ...schemas import AlertCreate, AlertEventOut, AlertOut, AlertUpdate, PaginatedResponse
 from ...services.alert_service import AlertService
 from ...utils.permissions import require_roles
-from ...utils.security import get_current_user
 
 router = APIRouter(
     prefix="/alerts",
     tags=["alerts"],
-    dependencies=[Depends(require_roles("admin", "operator"))],
+    dependencies=[Depends(require_roles("admin", "operator", "viewer"))],
 )
+
+
+def _to_list_dto(items):
+    """List endpoints must not embed MP4 base64 — clients fetch /alerts/{id} for video.
+
+    Convert ORM rows to detached AlertOut models, then null out the video field
+    so we never touch the persisted column.
+    """
+    out = []
+    for a in items:
+        dto = AlertOut.model_validate(a, from_attributes=True)
+        dto.video_evidence = None
+        out.append(dto)
+    return out
 
 
 @router.get("", response_model=PaginatedResponse[AlertOut])
@@ -34,7 +47,7 @@ def get_alerts(
 ):
     items, total = AlertService.list(db, skip=skip, limit=limit)
     return PaginatedResponse(
-        items=items,
+        items=_to_list_dto(items),
         total=total,
         skip=skip,
         limit=limit,
@@ -46,7 +59,7 @@ def get_alerts(
 def get_all_alerts(db: Session = Depends(get_db)):
     """Return all alerts without pagination (used by legacy dashboard)."""
     items, _ = AlertService.list(db, skip=0, limit=10_000)
-    return items
+    return _to_list_dto(items)
 
 
 @router.get("/{alert_id}/events", response_model=List[AlertEventOut])
@@ -65,7 +78,12 @@ def get_alert(alert_id: str, db: Session = Depends(get_db)):
     return alert
 
 
-@router.post("", response_model=AlertOut, status_code=201)
+@router.post(
+    "",
+    response_model=AlertOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
 def create_alert(payload: AlertCreate, db: Session = Depends(get_db)):
     return AlertService.create(db, payload)
 
@@ -75,7 +93,7 @@ def update_alert(
     alert_id: str,
     payload: AlertUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("admin", "operator")),
 ):
     updated = AlertService.update(db, alert_id, payload, actor=current_user)
     if not updated:
@@ -84,6 +102,11 @@ def update_alert(
 
 
 @router.delete("/{alert_id}", status_code=204)
-def delete_alert(alert_id: str, db: Session = Depends(get_db)):
+def delete_alert(
+    alert_id: str,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    del current_user
     if not AlertService.delete(db, alert_id):
         raise HTTPException(status_code=404, detail="Alert not found")

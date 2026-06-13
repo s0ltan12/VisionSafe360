@@ -4,22 +4,13 @@ import {
   Search, 
   ChevronDown, 
   X,
-  PlayCircle,
-  MessageSquare,
-  CheckCircle,
+  ExternalLink,
   CircleDot,
   AlertOctagon,
-  Clock,
   MapPin,
-  Share2,
   Download,
   AlertTriangle,
-  FileText,
-  MoreHorizontal,
-  ChevronUp,
-  Trash2,
   ImageOff,
-  XCircle
 } from 'lucide-react';
 import { Alert as AlertType, AlertEvent, Severity, Status, HazardType } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -119,36 +110,51 @@ const EvidencePlaceholder = ({ compact = false }: { compact?: boolean }) => (
 const AlertDetails = ({
   alert,
   onClose,
-  onAcknowledge,
-  onResolve,
-  onFalsePositive,
-  onEscalate,
-  actionError,
-  updatingAlertId,
+  onOpenIncident,
   timeline,
   timelineLoading,
   timelineError,
 }: {
   alert: AlertType,
   onClose: () => void,
-  onAcknowledge: () => void,
-  onResolve: () => void,
-  onFalsePositive: () => void,
-  onEscalate: () => void,
-  actionError: string | null,
-  updatingAlertId: string | null,
+  onOpenIncident: (incidentId: string) => void,
   timeline: AlertEvent[],
   timelineLoading: boolean,
   timelineError: string | null,
 }) => {
-  const { t } = useLanguage();
-  const hasEvidence = Boolean(alert.thumbnail);
-  const confidenceLabel = formatConfidence(alert.confidence);
+	  const { t } = useLanguage();
+	  const [videoFailed, setVideoFailed] = useState(false);
+	  const [previewFrame, setPreviewFrame] = useState<string | null>(null);
+	  const hasVideoEvidence = Boolean(alert.videoEvidence) && !videoFailed;
+	  const exactEventFrame = alert.eventFrame || alert.thumbnail || null;
+	  const hasEvidence = hasVideoEvidence || Boolean(exactEventFrame);
+	  const confidenceLabel = formatConfidence(alert.confidence);
+
+  useEffect(() => {
+    setVideoFailed(false);
+  }, [alert.id, alert.videoEvidence]);
   
   return (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-label={`Alert details: ${alert.id}`}>
-    <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
-      <div className="h-16 px-6 border-b border-zinc-800 flex justify-between items-center bg-[#0f0f11] flex-shrink-0">
+	    <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 shadow-2xl w-full max-w-[min(96vw,96rem)] h-[90vh] flex flex-col overflow-hidden">
+	      {previewFrame && (
+	        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-4" role="dialog" aria-modal="true" aria-label="Exact event frame preview">
+	          <button
+	            type="button"
+	            onClick={() => setPreviewFrame(null)}
+	            className={`absolute end-5 top-5 rounded border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-300 hover:bg-zinc-900 hover:text-white ${a11yClasses.focusRing}`}
+	            aria-label="Close exact event frame preview"
+	          >
+	            <X size={20} aria-hidden="true" />
+	          </button>
+	          <img
+	            src={previewFrame}
+	            alt={`Opened exact event frame: ${alert.type} at ${alert.zone}`}
+	            className="max-h-[92vh] max-w-[96vw] object-contain"
+	          />
+	        </div>
+	      )}
+	      <div className="h-16 px-6 border-b border-zinc-800 flex justify-between items-center bg-[#0f0f11] flex-shrink-0">
         <div className="flex items-center space-x-4 rtl:space-x-reverse">
           <h2 className="text-lg font-bold text-white tracking-tight flex items-center">
             {t('alertDetails')} <span className="mx-2 text-zinc-600">/</span> <span className="font-mono text-vs-orange">{alert.id}</span>
@@ -187,21 +193,48 @@ const AlertDetails = ({
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col bg-black p-6 overflow-y-auto">
              <div className="relative aspect-video bg-zinc-900 rounded-lg overflow-hidden border border-zinc-800 mb-4 group shadow-2xl">
-               {hasEvidence ? (
-                 <img
-                   src={alert.thumbnail || ''}
-                   alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
-                   className="w-full h-full object-cover opacity-90"
+               {hasVideoEvidence ? (
+                 <video
+                   src={alert.videoEvidence || ''}
+                   poster={exactEventFrame || undefined}
+                   className="w-full h-full object-contain bg-black"
+                   controls
+	                   controlsList="nodownload"
+	                   autoPlay
+	                   muted
+	                   playsInline
+	                   preload="metadata"
+                   aria-label={`3 second alert evidence clip: ${alert.type} incident at ${alert.zone}. Event occurs at the midpoint.`}
+                   onError={() => setVideoFailed(true)}
                  />
-               ) : (
+	               ) : exactEventFrame ? (
+	                 <button
+	                   type="button"
+	                   onClick={() => setPreviewFrame(exactEventFrame)}
+	                   className="h-full w-full cursor-zoom-in bg-black"
+	                   aria-label="Open alert evidence frame"
+	                 >
+	                   <img
+	                     src={exactEventFrame}
+	                     alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
+	                     className="w-full h-full object-cover opacity-90"
+	                   />
+	                 </button>
+	               ) : (
                  <EvidencePlaceholder />
                )}
                <div className="absolute top-4 start-4 bg-black/70 backdrop-blur px-3 py-1.5 rounded border border-white/10 flex items-center space-x-2 rtl:space-x-reverse">
                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
-                  <span className="text-white text-xs font-mono uppercase tracking-tighter">{hasEvidence ? 'Evidence Capture' : 'Alert Record'} • {alert.timestamp}</span>
+                  <span className="text-white text-xs font-mono uppercase tracking-tighter">{hasVideoEvidence ? '3s Evidence Clip' : hasEvidence ? 'Evidence Capture' : 'Alert Record'} • {alert.timestamp}</span>
                </div>
+
+               {hasVideoEvidence && (
+                 <div className="absolute top-4 end-4 rounded border border-white/10 bg-black/70 px-3 py-1.5 text-xs font-mono uppercase tracking-tighter text-zinc-200 backdrop-blur pointer-events-none">
+                   Event at 1.5s
+                 </div>
+               )}
                
-               {hasEvidence && (
+               {hasEvidence && !hasVideoEvidence && (
                  <div className="absolute bottom-4 start-4 end-4 pointer-events-none">
                    <div className="inline-flex max-w-full items-center gap-3 rounded border border-vs-orange/40 bg-black/75 px-3 py-2 text-xs font-mono text-zinc-200 backdrop-blur">
                      <span className="font-bold uppercase text-vs-orange">{alert.type}</span>
@@ -213,7 +246,35 @@ const AlertDetails = ({
                  </div>
                )}
              </div>
-                <div className="grid grid-cols-2 gap-4">
+             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(18rem,0.85fr)_1fr_1fr]">
+                <div className="bg-[#0f0f11] border border-zinc-800 rounded overflow-hidden">
+	                   <div className="aspect-video bg-black">
+	                     {exactEventFrame ? (
+	                       <button
+	                         type="button"
+	                         onClick={() => setPreviewFrame(exactEventFrame)}
+	                         className="h-full w-full cursor-zoom-in bg-black"
+	                         aria-label="Open exact event frame"
+	                       >
+	                         <img
+	                           src={exactEventFrame}
+	                           alt={`Exact annotated event frame: ${alert.type} at ${alert.zone}`}
+	                           className="h-full w-full object-contain"
+	                         />
+	                       </button>
+	                     ) : (
+                       <EvidencePlaceholder compact />
+                     )}
+                   </div>
+                   <div className="border-t border-zinc-800 p-4">
+                      <h4 className="text-[10px] font-bold text-zinc-500 uppercase mb-2">Exact Event Frame</h4>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-mono text-zinc-500">
+                        <span>Frame</span><span className="text-right text-zinc-300">{alert.frameNumber ?? '—'}</span>
+                        <span>Track</span><span className="text-right text-zinc-300">{alert.trackId ?? alert.workerId ?? '—'}</span>
+                        <span>Event Time</span><span className="text-right text-zinc-300">1.5s</span>
+                      </div>
+                   </div>
+                </div>
                 <div className="bg-[#0f0f11] border border-zinc-800 rounded p-4 flex items-start space-x-3 rtl:space-x-reverse">
                    <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 text-blue-500"><AlertOctagon size={18} aria-hidden="true" /></div>
                    <div className="flex-1">
@@ -231,61 +292,31 @@ const AlertDetails = ({
                 </div>
              </div>
         </div>
-        <div className="w-96 bg-[#0f0f11] border-s border-zinc-800 flex flex-col p-6 shadow-xl">
-           <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-6 opacity-60">System Actions</h3>
-           <div className="space-y-3">
-              {actionError && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-300" role="alert">
-                  {actionError}
-                </div>
-              )}
-              {alert.status === 'New' && (
-                <button 
-                  className={`w-full py-3 bg-vs-orange hover:bg-vs-lightOrange text-black font-bold rounded text-xs uppercase tracking-widest transition-all shadow-glow flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
-                  onClick={onAcknowledge}
-                  disabled={updatingAlertId === alert.id}
-                  aria-label="Acknowledge this alert"
-                >
-                   <CheckCircle size={16} aria-hidden="true" />
-                   <span>{t('acknowledge')}</span>
-                </button>
-              )}
-              {(alert.status === 'New' || alert.status === 'Acknowledged') && (
-                <button 
-                  className={`w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs uppercase tracking-widest transition-all flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
-                  onClick={onResolve}
-                  disabled={updatingAlertId === alert.id}
-                  aria-label="Resolve this alert"
-                >
-                   <CheckCircle size={16} aria-hidden="true" />
-                   <span>{t('resolve')}</span>
-                </button>
-              )}
-              {(alert.status === 'New' || alert.status === 'Acknowledged' || alert.status === 'In Investigation') && (
-                <button
-                  className={`w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold rounded text-xs uppercase tracking-widest transition-all border border-zinc-700 flex items-center justify-center space-x-2 rtl:space-x-reverse disabled:cursor-not-allowed disabled:opacity-60 ${a11yClasses.focusRing}`}
-                  onClick={onFalsePositive}
-                  disabled={updatingAlertId === alert.id}
-                  aria-label="Mark this alert as false positive"
-                >
-                  <XCircle size={16} aria-hidden="true" />
-                  <span>False Positive</span>
-                </button>
-              )}
-              <button 
-                className={`w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded text-xs uppercase tracking-widest transition-all border border-zinc-700 flex items-center justify-center space-x-2 rtl:space-x-reverse ${a11yClasses.focusRing}`}
-                onClick={onEscalate}
-                aria-label="Escalate this alert"
-              >
-                 <FileText size={16} aria-hidden="true" />
-                 <span>{t('escalate')}</span>
-              </button>
-           </div>
+        <div className="w-full max-w-[22rem] bg-[#0f0f11] border-s border-zinc-800 flex flex-col p-4 sm:p-6 shadow-xl">
+	           <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-6 opacity-60">Alert Signal</h3>
+	           <div className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
+	              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Linked Incident</p>
+	              <p className="mt-2 font-mono text-sm text-zinc-200">{alert.incidentId || 'Unlinked legacy alert'}</p>
+	              {alert.incidentId && (
+	                <button
+	                  type="button"
+	                  onClick={() => onOpenIncident(alert.incidentId as string)}
+	                  className={`mt-4 inline-flex items-center gap-2 rounded border border-vs-orange/40 bg-vs-orange/10 px-3 py-2 text-xs font-bold uppercase tracking-wide text-vs-orange transition-colors hover:bg-vs-orange hover:text-black ${a11yClasses.focusRing}`}
+	                  aria-label={`Open linked incident ${alert.incidentId}`}
+	                >
+	                  <ExternalLink size={14} aria-hidden="true" />
+	                  <span>Open Incident</span>
+	                </button>
+	              )}
+	              <p className="mt-3 text-xs leading-relaxed text-zinc-500">
+	                Incident lifecycle actions are handled from the incident workspace so alert signals cannot diverge from the operational case.
+	              </p>
+	           </div>
            
            <div className="mt-8 border-t border-zinc-800 pt-6">
               <h4 className="text-[10px] font-bold text-zinc-600 uppercase mb-4 tracking-widest">Metadata</h4>
               <div className="space-y-2 text-[11px] font-mono text-zinc-500">
-                 <div className="flex justify-between"><span>Evidence:</span><span className="text-zinc-300">{hasEvidence ? 'Captured' : 'Not available'}</span></div>
+                 <div className="flex justify-between"><span>Evidence:</span><span className="text-zinc-300">{hasVideoEvidence ? '3 sec clip' : hasEvidence ? 'Captured frame' : 'Not available'}</span></div>
                  <div className="flex justify-between"><span>Frame:</span><span className="text-zinc-300">{alert.frameNumber ?? '—'}</span></div>
                  <div className="flex justify-between"><span>Camera:</span><span className="text-zinc-300">{alert.camera}</span></div>
                  <div className="flex justify-between"><span>Camera ID:</span><span className="text-zinc-300">{alert.cameraId || '—'}</span></div>
@@ -340,7 +371,15 @@ const AlertDetails = ({
   );
 };
 
-const Alerts = () => {
+const Alerts = ({
+  targetAlertId,
+  onTargetAlertOpened,
+  onOpenIncident,
+}: {
+  targetAlertId?: string | null;
+  onTargetAlertOpened?: () => void;
+  onOpenIncident?: (incidentId: string) => void;
+}) => {
   const [alerts, setAlerts] = useState<AlertType[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedAlert, setSelectedAlert] = useState<AlertType | null>(null);
@@ -348,8 +387,6 @@ const Alerts = () => {
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [updatingAlertId, setUpdatingAlertId] = useState<string | null>(null);
   const [timelineByAlertId, setTimelineByAlertId] = useState<Record<string, AlertEvent[]>>({});
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
@@ -369,6 +406,28 @@ const Alerts = () => {
   useEffect(() => {
     fetchAlerts();
   }, [fetchAlerts]);
+
+  useEffect(() => {
+    if (!targetAlertId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const full = await AlertsAPI.getById(targetAlertId);
+        if (cancelled) return;
+        setAlerts(prev => {
+          const exists = prev.some(alert => alert.id === full.id);
+          return exists
+            ? prev.map(alert => alert.id === full.id ? { ...alert, ...full } : alert)
+            : [full, ...prev];
+        });
+        setSelectedAlert(full);
+        onTargetAlertOpened?.();
+      } catch (e) {
+        console.error(`Failed to open alert ${targetAlertId}:`, e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [targetAlertId, onTargetAlertOpened]);
 
   useEffect(() => {
     if (!selectedAlert) return;
@@ -400,6 +459,22 @@ const Alerts = () => {
     };
   }, [selectedAlert?.id]);
 
+  useEffect(() => {
+    if (!selectedAlert || selectedAlert.videoEvidence) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const full = await AlertsAPI.getById(selectedAlert.id);
+        if (cancelled || !full.videoEvidence) return;
+        setAlerts(prev => prev.map(a => a.id === full.id ? { ...a, videoEvidence: full.videoEvidence } : a));
+        setSelectedAlert(prev => prev && prev.id === full.id ? { ...prev, videoEvidence: full.videoEvidence } : prev);
+      } catch (e) {
+        console.error(`Failed to fetch alert detail ${selectedAlert.id}:`, e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedAlert?.id]);
+
   const filteredAlerts = useMemo(() => {
     let result = alerts;
 
@@ -426,79 +501,13 @@ const Alerts = () => {
   const severityOptions: Severity[] = ['Critical', 'High', 'Medium', 'Low'];
   const typeOptions: HazardType[] = Array.from(new Set(alerts.map(a => a.type)));
 
-  const persistStatus = async (status: Status) => {
-    if (!selectedAlert) return;
-    const previous = selectedAlert;
-    setActionError(null);
-    setUpdatingAlertId(previous.id);
-    setAlerts(prev => prev.map(a => a.id === previous.id ? { ...a, status } : a));
-    setSelectedAlert(prev => prev ? { ...prev, status } : null);
-
-    try {
-      const updated = await AlertsAPI.update(previous.id, { status });
-      setAlerts(prev => prev.map(a => a.id === updated.id ? updated : a));
-      setSelectedAlert(prev => prev && prev.id === updated.id ? updated : prev);
-      const events = await AlertsAPI.getEvents(previous.id);
-      setTimelineByAlertId(prev => ({ ...prev, [previous.id]: events }));
-    } catch (e) {
-      console.error(`Failed to update alert ${previous.id}:`, e);
-      setAlerts(prev => prev.map(a => a.id === previous.id ? previous : a));
-      setSelectedAlert(previous);
-      setActionError('Failed to save alert status. Please try again.');
-    } finally {
-      setUpdatingAlertId(null);
-    }
-  };
-
-  const handleAcknowledge = () => {
-    void persistStatus('Acknowledged');
-  };
-
-  const handleResolve = () => {
-    void persistStatus('Resolved');
-  };
-
-  const handleFalsePositive = () => {
-    void persistStatus('False Positive');
-  };
-
-  const handleEscalate = () => {
-    if (!selectedAlert) return;
-    alert(`Escalating alert ${selectedAlert.id} to incident management`);
-  };
-
-  const handleDelete = async (id: string) => {
-    const previousAlerts = alerts;
-    setActionError(null);
-    setUpdatingAlertId(id);
-    setAlerts(prev => prev.filter(a => a.id !== id));
-    if (selectedAlert?.id === id) {
-      setSelectedAlert(null);
-    }
-
-    try {
-      await AlertsAPI.delete(id);
-    } catch (e) {
-      console.error(`Failed to delete alert ${id}:`, e);
-      setAlerts(previousAlerts);
-      setActionError('Failed to delete alert. Please try again.');
-    } finally {
-      setUpdatingAlertId(null);
-    }
-  };
-
   return (
     <div className="flex flex-col h-full">
       {selectedAlert && (
         <AlertDetails
           alert={selectedAlert}
           onClose={() => setSelectedAlert(null)}
-          onAcknowledge={handleAcknowledge}
-          onResolve={handleResolve}
-          onFalsePositive={handleFalsePositive}
-          onEscalate={handleEscalate}
-          actionError={actionError}
-          updatingAlertId={updatingAlertId}
+          onOpenIncident={(incidentId) => onOpenIncident?.(incidentId)}
           timeline={timelineByAlertId[selectedAlert.id] || []}
           timelineLoading={timelineLoading}
           timelineError={timelineError}
@@ -518,7 +527,7 @@ const Alerts = () => {
         </div>
 
         <div className="flex gap-3 flex-wrap">
-          <div className="flex-1 min-w-[240px] relative">
+          <div className="flex-1 min-w-0 sm:min-w-[240px] relative">
             <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" aria-hidden="true" />
             <input
               type="text"
@@ -543,7 +552,7 @@ const Alerts = () => {
 
         {showFilters && (
           <div id="filter-panel" className="mt-3 p-4 bg-zinc-900 border border-zinc-800 rounded-lg flex gap-4 flex-wrap">
-            <div className="flex-1 min-w-[150px]">
+            <div className="flex-1 min-w-0 sm:min-w-[150px]">
               <label htmlFor="severity-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Severity</label>
               <select
                 id="severity-filter"
@@ -558,7 +567,7 @@ const Alerts = () => {
                 ))}
               </select>
             </div>
-            <div className="flex-1 min-w-[150px]">
+            <div className="flex-1 min-w-0 sm:min-w-[150px]">
               <label htmlFor="type-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Type</label>
               <select
                 id="type-filter"
@@ -655,17 +664,19 @@ const Alerts = () => {
                     </div>
                     <div className="flex flex-col items-end gap-2 flex-shrink-0">
                       <SeverityBadge severity={alert.severity} />
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDelete(alert.id);
-                        }}
-                        disabled={updatingAlertId === alert.id}
-                        className={`p-1.5 hover:bg-red-500/20 rounded text-zinc-500 hover:text-red-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${a11yClasses.focusRing}`}
-                        aria-label={`Delete alert ${alert.id}`}
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                      </button>
+	                      {alert.incidentId && (
+	                        <button
+	                          type="button"
+	                          onClick={(event) => {
+	                            event.stopPropagation();
+	                            onOpenIncident?.(alert.incidentId as string);
+	                          }}
+	                          className={`rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wide text-zinc-500 transition-colors hover:border-vs-orange/50 hover:text-vs-orange ${a11yClasses.focusRing}`}
+	                          aria-label={`Open linked incident ${alert.incidentId}`}
+	                        >
+	                          {alert.incidentId}
+	                        </button>
+	                      )}
                     </div>
                   </div>
                 </div>

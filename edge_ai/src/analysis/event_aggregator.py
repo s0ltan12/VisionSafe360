@@ -315,6 +315,15 @@ class EventAggregator:
                 "correlation",
                 metadata["correlation_id"],
             )
+        if metadata.get("safety_zone") and metadata.get("safety_zone_id"):
+            return (
+                event.camera_id,
+                event.event_type,
+                "zone",
+                metadata.get("safety_zone_id"),
+                "object",
+                metadata.get("stable_object_key") or event.track_id or 0,
+            )
         operational_case_id = metadata.get("operational_case_id")
         if lowered == "forklift_proximity" and operational_case_id:
             return (
@@ -351,6 +360,8 @@ class EventAggregator:
             return 0.0
         if event_type == "forklift_overspeed":
             return 0.0
+        if event_type.startswith("zone_"):
+            return 0.0
         if "fall" in event_type:
             return FALL_PERSISTENCE_SEC  # 0 — fall has its own state machine
         if event_type.startswith("ppe_") or event_type in {"no_helmet", "no_vest"}:
@@ -364,6 +375,13 @@ class EventAggregator:
         """Cooldown duration after emission."""
         if "fall" in event.event_type:
             return FALL_COOLDOWN_SEC
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        if event.event_type.startswith("zone_"):
+            rules = metadata.get("zone_rules") if isinstance(metadata.get("zone_rules"), dict) else {}
+            try:
+                return float(rules.get("cooldown_sec", HAZARD_COOLDOWN_SEC))
+            except (TypeError, ValueError):
+                return HAZARD_COOLDOWN_SEC
         return HAZARD_COOLDOWN_SEC
 
     @staticmethod

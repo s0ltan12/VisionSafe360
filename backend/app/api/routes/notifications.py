@@ -13,6 +13,7 @@ from ...config.settings import settings
 from ...models import Notification
 from ...schemas import NotificationCreate, NotificationMarkRead, NotificationOut, PaginatedResponse
 from ...utils.security import get_current_user
+from ...utils.security import normalize_role
 from ...utils.permissions import require_roles
 from ...api.websocket.ws_notifications import notification_ws_manager
 
@@ -41,7 +42,12 @@ def list_notifications(
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit, has_more=(skip + limit) < total)
 
 
-@router.post("", response_model=NotificationOut, status_code=201)
+@router.post(
+    "",
+    response_model=NotificationOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
 async def create_notification(payload: NotificationCreate, db: Session = Depends(get_db)):
     """Create a notification and broadcast it via WebSocket."""
     row = Notification(
@@ -71,8 +77,11 @@ async def create_notification(payload: NotificationCreate, db: Session = Depends
 
 
 @router.post("/mark-read", status_code=204)
-def mark_as_read(payload: NotificationMarkRead, db: Session = Depends(get_db)):
-    db.query(Notification).filter(Notification.id.in_(payload.ids)).update(
+def mark_as_read(payload: NotificationMarkRead, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    db.query(Notification).filter(
+        Notification.id.in_(payload.ids),
+        (Notification.user_id == current_user.id) | (Notification.user_id.is_(None)),
+    ).update(
         {"is_read": True}, synchronize_session="fetch"
     )
     db.commit()
@@ -87,9 +96,14 @@ def mark_all_read(db: Session = Depends(get_db), current_user=Depends(get_curren
 
 
 @router.delete("/{notification_id}", status_code=204)
-def delete_notification(notification_id: str, db: Session = Depends(get_db)):
-    row = db.query(Notification).filter(Notification.id == notification_id).first()
+def delete_notification(notification_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    row = db.query(Notification).filter(
+        Notification.id == notification_id,
+        (Notification.user_id == current_user.id) | (Notification.user_id.is_(None)),
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Notification not found")
+    if row.user_id is None and normalize_role(current_user.role) != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required to delete broadcast notifications")
     db.delete(row)
     db.commit()

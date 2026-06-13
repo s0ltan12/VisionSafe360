@@ -472,6 +472,8 @@ class WorkerPanelLayer:
         # Hazard events grouped by track
         wk_ev: Dict[int, List[HazardEvent]] = defaultdict(list)
         for ev in hazard_events:
+            if (ev.metadata or {}).get("render_only"):
+                continue
             if ev.track_id is not None:
                 wk_ev[ev.track_id].append(ev)
 

@@ -71,7 +71,9 @@ class PPEAnalyzer:
                 continue
 
             item, event_type, severity = spec
-            track_id = person.track_id if person.track_id is not None else 1
+            raw_track_id = person.track_id
+            track_id = raw_track_id if raw_track_id is not None else 1
+            has_stable_track = raw_track_id is not None and int(raw_track_id) > 0
             events.append(HazardEvent(
                 event_type=event_type,
                 severity=severity,
@@ -87,6 +89,11 @@ class PPEAnalyzer:
                     "ppe_detection_bbox": ppe.bbox,
                     "confidence": round(float(ppe.confidence), 4),
                     "person_bbox": person.bbox,
+                    "worker_track_id": raw_track_id,
+                    "worker_track_id_valid": has_stable_track,
+                    "worker_track_id_fallback": not has_stable_track,
+                    "worker_track_id_source": "bytetrack" if has_stable_track else "fallback",
+                    "composite_eligible": has_stable_track,
                 },
             ))
 

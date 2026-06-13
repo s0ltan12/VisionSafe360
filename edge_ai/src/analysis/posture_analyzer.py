@@ -8,10 +8,9 @@ Integrated from the Ergonomic Risk Assessment standalone project.
 from __future__ import annotations
 
 import logging
-import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -21,7 +20,6 @@ from ..config.settings import (
     POSTURE_EMA_ALPHA,
     POSTURE_KEYPOINT_CONF_MIN,
     POSTURE_SUSTAINED_THRESHOLD,
-    TEMPORAL_SMOOTH_WINDOW,
 )
 from ..models.hazard_event import HazardEvent
 from ..models.severity import Severity
@@ -97,6 +95,70 @@ class PostureAnalyzer:
         self.last_samples: List[HazardEvent] = []
         logger.info("PostureAnalyzer initialized (full RULA/REBA)")
 
+    @staticmethod
+    def _score_side(kp: np.ndarray, kp_conf: np.ndarray, side: str) -> dict:
+        angles = compute_angles(
+            kp,
+            kp_conf,
+            side=side,
+            confidence_threshold=POSTURE_KEYPOINT_CONF_MIN,
+        )
+        rula_result = compute_rula(angles)
+        reba_result = compute_reba(angles)
+        return {
+            "side": side,
+            "angles": angles,
+            "rula_result": rula_result,
+            "reba_result": reba_result,
+            "rula_score": rula_result["final_score"],
+            "reba_score": reba_result["final_score"],
+        }
+
+    @staticmethod
+    def _score_rank(side_score: dict) -> tuple[int, int]:
+        rula_score = int(side_score["rula_score"])
+        reba_score = int(side_score["reba_score"])
+        return (
+            int(rula_score >= 7 or reba_score >= 11),
+            int(rula_score >= RULA_ALERT_THRESHOLD or reba_score >= REBA_ALERT_THRESHOLD),
+            reba_score,
+            rula_score,
+        )
+
+    @staticmethod
+    def _event_metadata(
+        *,
+        score: dict,
+        valid_mask: np.ndarray,
+        kp_conf: np.ndarray,
+        sustained: Optional[float] = None,
+        score_history: Optional[deque] = None,
+    ) -> dict:
+        metadata = {
+            "rula_score": score["rula_score"],
+            "reba_score": score["reba_score"],
+            "rula_risk": score["rula_result"]["risk_level"],
+            "reba_risk": score["reba_result"]["risk_level"],
+            "analysis_side": score["side"],
+            "angles": {
+                key: round(float(value), 2) if value is not None else None
+                for key, value in score["angles"].items()
+            },
+            "rula_breakdown": score["rula_result"]["breakdown"],
+            "reba_breakdown": score["reba_result"]["breakdown"],
+            "valid_keypoints": int(np.count_nonzero(valid_mask)),
+            "keypoint_conf_min": float(POSTURE_KEYPOINT_CONF_MIN),
+            "keypoint_conf_mean": round(float(np.mean(kp_conf)), 3),
+        }
+        if sustained is not None:
+            metadata["sustained_seconds"] = round(sustained, 1)
+        if score_history:
+            values = [float(v) for v in score_history]
+            metadata["score_window_size"] = len(values)
+            metadata["rula_score_avg"] = round(sum(values) / len(values), 2)
+            metadata["rula_score_max"] = int(max(values))
+        return metadata
+
     def analyze(
         self,
         pose_results: Any,
@@ -113,17 +175,20 @@ class PostureAnalyzer:
         self.last_samples = []
 
         if pose_results is None:
+            self._purge_stale(timestamp)
             return events
 
         # Extract keypoints — shape: (N, 17, 3) where last dim = (x, y, conf)
         kps_data = getattr(pose_results, "keypoints", None)
         if kps_data is None:
+            self._purge_stale(timestamp)
             return events
 
         xy = kps_data.xy          # (N, 17, 2)  on CPU
         conf = kps_data.conf      # (N, 17)
 
         if xy is None or conf is None:
+            self._purge_stale(timestamp)
             return events
 
         # Convert to numpy
@@ -133,6 +198,13 @@ class PostureAnalyzer:
         else:
             xy_np = np.array(xy)
             conf_np = np.array(conf)
+
+        if xy_np.ndim != 3 or xy_np.shape[1] < 17 or xy_np.shape[2] < 2:
+            self._purge_stale(timestamp)
+            return events
+        if conf_np.ndim != 2 or conf_np.shape[1] < 17:
+            self._purge_stale(timestamp)
+            return events
 
         n_persons = xy_np.shape[0]
 
@@ -181,15 +253,16 @@ class PostureAnalyzer:
 
             kp = st.smoothed_kps  # use smoothed
 
-            # ── Compute body angles (full algorithm from Ergonomic RA) ──
-            angles = compute_angles(kp, kp_conf, side="left")
-
-            # ── Full RULA and REBA scoring ──────────────────────────
-            rula_result = compute_rula(angles)
-            reba_result = compute_reba(angles)
-
-            rula_score = rula_result["final_score"]
-            reba_score = reba_result["final_score"]
+            # Score both visible sides and use the higher-risk side for alerts.
+            side_scores = [
+                self._score_side(kp, kp_conf, "left"),
+                self._score_side(kp, kp_conf, "right"),
+            ]
+            score = max(side_scores, key=self._score_rank)
+            rula_result = score["rula_result"]
+            reba_result = score["reba_result"]
+            rula_score = score["rula_score"]
+            reba_score = score["reba_score"]
             st.rula_score = rula_score
             st.reba_score = reba_score
             st.score_history.append(rula_score)
@@ -203,6 +276,13 @@ class PostureAnalyzer:
                 if is_risky
                 else Severity.LOW
             )
+            sample_metadata = self._event_metadata(
+                score=score,
+                valid_mask=valid_mask,
+                kp_conf=kp_conf,
+                score_history=st.score_history,
+            )
+            sample_metadata["record_only"] = True
             self.last_samples.append(HazardEvent(
                 event_type="ergonomic_sample",
                 severity=sample_severity,
@@ -211,18 +291,12 @@ class PostureAnalyzer:
                 frame_number=frame_number,
                 track_id=tid,
                 description=f"Ergonomic score sample RULA={rula_score} REBA={reba_score} track={tid}",
-                metadata={
-                    "record_only": True,
-                    "rula_score": rula_score,
-                    "reba_score": reba_score,
-                    "rula_risk": rula_result["risk_level"],
-                    "reba_risk": reba_result["risk_level"],
-                },
+                metadata=sample_metadata,
             ))
 
             # ── Event emission ──────────────────────────────────────
-            # Immediate critical (RULA 7 = highest risk)
-            if rula_score >= 7:
+            # Immediate critical (RULA 7, or REBA's very-high-risk band).
+            if rula_score >= 7 or reba_score >= 11:
                 if timestamp - st.last_event_time >= POSTURE_COOLDOWN_SEC:
                     st.last_event_time = timestamp
                     st.bad_posture_start = None
@@ -238,12 +312,12 @@ class PostureAnalyzer:
                             f"Dangerous posture RULA={rula_score} "
                             f"REBA={reba_score} track={tid}"
                         ),
-                        metadata={
-                            "rula_score": rula_score,
-                            "reba_score": reba_score,
-                            "rula_risk": rula_result["risk_level"],
-                            "reba_risk": reba_result["risk_level"],
-                        },
+                        metadata=self._event_metadata(
+                            score=score,
+                            valid_mask=valid_mask,
+                            kp_conf=kp_conf,
+                            score_history=st.score_history,
+                        ),
                     ))
                 continue
 
@@ -269,13 +343,13 @@ class PostureAnalyzer:
                                 f"Sustained poor posture RULA={rula_score} "
                                 f"REBA={reba_score} track={tid}"
                             ),
-                            metadata={
-                                "rula_score": rula_score,
-                                "reba_score": reba_score,
-                                "rula_risk": rula_result["risk_level"],
-                                "reba_risk": reba_result["risk_level"],
-                                "sustained_seconds": round(sustained, 1),
-                            },
+                            metadata=self._event_metadata(
+                                score=score,
+                                valid_mask=valid_mask,
+                                kp_conf=kp_conf,
+                                sustained=sustained,
+                                score_history=st.score_history,
+                            ),
                         ))
                         st.bad_posture_start = None
                         st.high_score_start = 0.0

@@ -22,6 +22,9 @@ logger = logging.getLogger("visionsafe.websocket")
 
 
 def serialize_incident(incident) -> dict:
+	def _iso(value):
+		return value.isoformat() if value else None
+
 	return {
 		"id": incident.id,
 		"zone": incident.zone,
@@ -31,9 +34,19 @@ def serialize_incident(incident) -> dict:
 		"camera_name": getattr(incident, "camera_name", None),
 		"worker_id": getattr(incident, "worker_id", None),
 		"worker_gpu_id": getattr(incident, "worker_gpu_id", None),
+		"status": incident.status.value if hasattr(getattr(incident, "status", None), "value") else str(getattr(incident, "status", "New")),
+		"started_at": _iso(getattr(incident, "started_at", None)),
+		"validated_at": _iso(getattr(incident, "validated_at", None)),
+		"acknowledged_at": _iso(getattr(incident, "acknowledged_at", None)),
+		"acknowledged_by": getattr(incident, "acknowledged_by", None),
+		"resolved_at": _iso(getattr(incident, "resolved_at", None)),
+		"resolved_by": getattr(incident, "resolved_by", None),
+		"archived_at": _iso(getattr(incident, "archived_at", None)),
+		"duration_seconds": getattr(incident, "duration_seconds", None),
+		"escalation_count": getattr(incident, "escalation_count", 0),
 		"root_cause": incident.root_cause,
 		"corrective_action": incident.corrective_action,
-		"created_at": incident.created_at.isoformat() if incident.created_at else None,
+		"created_at": _iso(incident.created_at),
 	}
 
 

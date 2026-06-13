@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { 
   LayoutDashboard, 
   Video, 
@@ -16,10 +16,10 @@ import {
   X,
   Settings
 } from 'lucide-react';
-import { Page, UserRole } from './types';
+import { NotificationRecord, Page, UserRole } from './types';
 import VisionSafeLogo from './components/VisionSafeLogo';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
-import { AuthAPI, setAuthToken } from './api';
+import { AuthAPI, NotificationsAPI, setAuthToken } from './api';
 import { a11yClasses } from './utils/accessibility';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -50,24 +50,32 @@ const SidebarItem = ({
     role="menuitem"
     aria-current={isActive ? 'page' : undefined}
     aria-label={`${label}${isActive ? ', current page' : ''}`}
-    className={`group w-full flex items-center space-x-3 rtl:space-x-reverse px-4 py-3 transition-all duration-200 border-s-2 mb-1 ${a11yClasses.focusRing} ${
+    className={`group min-w-0 w-full flex items-center space-x-3 rtl:space-x-reverse px-4 py-3 transition-all duration-200 border-s-2 mb-1 ${a11yClasses.focusRing} ${
       isActive 
         ? 'bg-vs-orange/10 text-vs-orange border-vs-orange' 
         : 'border-transparent text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100 hover:border-zinc-700'
     }`}
   >
     <Icon size={18} className={`transition-colors ${isActive ? 'text-vs-orange' : 'text-zinc-500 group-hover:text-zinc-300'}`} aria-hidden="true" />
-    <span className="font-medium text-sm tracking-wide">{label}</span>
+    <span className="min-w-0 truncate font-medium text-sm tracking-wide">{label}</span>
   </button>
 );
 
 interface NotificationItem {
-  id: number;
+  id: string;
   message: string;
   time: string;
   read: boolean;
   type: 'alert' | 'system' | 'info';
 }
+
+const toNotificationItem = (record: NotificationRecord): NotificationItem => ({
+  id: record.id,
+  message: record.message,
+  time: record.createdAt ? new Date(record.createdAt).toLocaleString() : 'just now',
+  read: record.isRead,
+  type: record.type === 'alert' || record.type === 'system' ? record.type : 'info',
+});
 
 const PageFallback = () => (
   <div className="h-full w-full flex items-center justify-center bg-[#050505] text-zinc-300">
@@ -82,24 +90,47 @@ const AppContent = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<{name: string, role: UserRole} | null>(null);
   const [currentPage, setCurrentPage] = useState<Page>(Page.DASHBOARD);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 1024);
+  const [targetAlertId, setTargetAlertId] = useState<string | null>(null);
+  const [targetIncidentId, setTargetIncidentId] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const { language, setLanguage, dir, t } = useLanguage();
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifWsRef = useRef<WebSocket | null>(null);
-  const notifIdCounter = useRef(100);
-
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  const refreshNotifications = useCallback(async () => {
+    try {
+      const records = await NotificationsAPI.getAll();
+      setNotifications(records.map(toNotificationItem));
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+    }
+  }, []);
 
   const markAllRead = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    NotificationsAPI.markAllRead().catch((error) => {
+      console.error('Failed to mark notifications read:', error);
+      void refreshNotifications();
+    });
   };
 
-  const dismissNotification = (id: number) => {
+  const dismissNotification = (id: string) => {
+    const previous = notifications;
     setNotifications(prev => prev.filter(n => n.id !== id));
+    NotificationsAPI.delete(id).catch((error) => {
+      console.error('Failed to dismiss notification:', error);
+      setNotifications(previous);
+    });
   };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void refreshNotifications();
+  }, [isAuthenticated, refreshNotifications]);
 
   // Connect to real-time notification WebSocket
   useEffect(() => {
@@ -124,15 +155,7 @@ const AppContent = () => {
           const payload = JSON.parse(event.data);
           if (payload.type === 'keepalive') return;
           if (payload.type === 'incident_created' || payload.type === 'notification') {
-            notifIdCounter.current += 1;
-            const msg = payload.message || payload.incident?.classification || 'New alert detected';
-            setNotifications(prev => [{
-              id: notifIdCounter.current,
-              message: msg,
-              time: 'just now',
-              read: false,
-              type: 'alert',
-            }, ...prev].slice(0, 50));
+            void refreshNotifications();
           }
         } catch {}
       };
@@ -150,7 +173,7 @@ const AppContent = () => {
         notifWsRef.current = null;
       }
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, refreshNotifications]);
 
   useEffect(() => {
     const token = localStorage.getItem('visionsafe360_token');
@@ -186,12 +209,44 @@ const AppContent = () => {
     setCurrentUser(null);
   };
 
+  const handlePageChange = (page: Page) => {
+    setCurrentPage(page);
+    setIsSidebarOpen(false);
+  };
+
+  const openAlertFromIncident = useCallback((alertId: string) => {
+    setTargetAlertId(alertId);
+    setTargetIncidentId(null);
+    setCurrentPage(Page.ALERTS);
+    setIsSidebarOpen(false);
+  }, []);
+
+  const openIncidentFromAlert = useCallback((incidentId: string) => {
+    setTargetIncidentId(incidentId);
+    setTargetAlertId(null);
+    setCurrentPage(Page.INCIDENTS);
+    setIsSidebarOpen(false);
+  }, []);
+
   const renderPage = () => {
     switch (currentPage) {
       case Page.DASHBOARD: return <Dashboard onViewAlerts={() => setCurrentPage(Page.ALERTS)} />;
       case Page.LIVE_MONITORING: return <LiveMonitoring />;
-      case Page.ALERTS: return <Alerts />;
-      case Page.INCIDENTS: return <Incidents />;
+      case Page.ALERTS: return (
+        <Alerts
+          targetAlertId={targetAlertId}
+          onTargetAlertOpened={() => setTargetAlertId(null)}
+          onOpenIncident={openIncidentFromAlert}
+        />
+      );
+      case Page.INCIDENTS: return (
+        <Incidents
+          currentUserRole={currentUser?.role}
+          targetIncidentId={targetIncidentId}
+          onTargetIncidentOpened={() => setTargetIncidentId(null)}
+          onOpenAlert={openAlertFromIncident}
+        />
+      );
       case Page.ERGONOMICS: return <Ergonomics />;
       case Page.REPORTS: return <Reports />;
       case Page.CAMERAS: return <CameraManagement />;
@@ -223,19 +278,52 @@ const AppContent = () => {
     }
   };
 
+  const navigationContent = (
+    <>
+      <div className="mb-6">
+        <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('monitoring')}</p>
+        {isSafetyEngineer && (
+          <>
+            <SidebarItem icon={LayoutDashboard} label={t('overview')} isActive={currentPage === Page.DASHBOARD} onClick={() => handlePageChange(Page.DASHBOARD)} />
+            <SidebarItem icon={Video} label={t('liveFeeds')} isActive={currentPage === Page.LIVE_MONITORING} onClick={() => handlePageChange(Page.LIVE_MONITORING)} />
+            <SidebarItem icon={AlertTriangle} label={t('alerts')} isActive={currentPage === Page.ALERTS} onClick={() => handlePageChange(Page.ALERTS)} />
+          </>
+        )}
+        <SidebarItem icon={FileText} label={t('incidents')} isActive={currentPage === Page.INCIDENTS} onClick={() => handlePageChange(Page.INCIDENTS)} />
+        <SidebarItem icon={UserCheck} label={t('ergonomics')} isActive={currentPage === Page.ERGONOMICS} onClick={() => handlePageChange(Page.ERGONOMICS)} />
+      </div>
+      
+      <div>
+        <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('analytics')}</p>
+        {isAnalyst && <SidebarItem icon={BarChart2} label={t('reports')} isActive={currentPage === Page.REPORTS} onClick={() => handlePageChange(Page.REPORTS)} />}
+      </div>
+
+      {isAdmin && (
+        <div className="mt-6">
+          <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('system')}</p>
+          <SidebarItem icon={Activity} label={t('cameras')} isActive={currentPage === Page.CAMERAS} onClick={() => handlePageChange(Page.CAMERAS)} />
+          <SidebarItem icon={Cpu} label={t('health')} isActive={currentPage === Page.HEALTH} onClick={() => handlePageChange(Page.HEALTH)} />
+          <SidebarItem icon={Users} label={t('users')} isActive={currentPage === Page.USERS} onClick={() => handlePageChange(Page.USERS)} />
+          <SidebarItem icon={Settings} label={t('configuration')} isActive={currentPage === Page.CONFIGURATION} onClick={() => handlePageChange(Page.CONFIGURATION)} />
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <div dir={dir} className="flex h-screen bg-[#050505] text-vs-text overflow-hidden font-sans antialiased">
+    <div dir="ltr" className={`flex h-screen w-full max-w-full bg-[#050505] text-vs-text overflow-hidden font-sans antialiased ${dir === 'rtl' ? 'md:flex-row-reverse' : ''}`}>
       {/* Mobile overlay */}
       {isSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black/50 z-20 lg:hidden" 
+          className="fixed inset-0 bg-black/60 z-40 md:hidden" 
           onClick={() => setIsSidebarOpen(false)}
           aria-hidden="true"
         />
       )}
 
       <aside 
-        className={`${isSidebarOpen ? 'w-64' : 'w-0 -ms-64'} flex-shrink-0 bg-[#09090b] border-e border-zinc-800 transition-all duration-300 flex flex-col z-30 fixed lg:relative h-full`}
+        dir={dir}
+        className="hidden md:flex h-full w-64 shrink-0 flex-col bg-[#09090b] border-e border-zinc-800"
         role="navigation"
         aria-label="Main navigation"
       >
@@ -247,34 +335,8 @@ const AppContent = () => {
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto custom-scrollbar px-2 pt-4" role="menu">
-          <div className="mb-6">
-            <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('monitoring')}</p>
-            {isSafetyEngineer && (
-              <>
-                <SidebarItem icon={LayoutDashboard} label={t('overview')} isActive={currentPage === Page.DASHBOARD} onClick={() => setCurrentPage(Page.DASHBOARD)} />
-                <SidebarItem icon={Video} label={t('liveFeeds')} isActive={currentPage === Page.LIVE_MONITORING} onClick={() => setCurrentPage(Page.LIVE_MONITORING)} />
-                <SidebarItem icon={AlertTriangle} label={t('alerts')} isActive={currentPage === Page.ALERTS} onClick={() => setCurrentPage(Page.ALERTS)} />
-              </>
-            )}
-            <SidebarItem icon={FileText} label={t('incidents')} isActive={currentPage === Page.INCIDENTS} onClick={() => setCurrentPage(Page.INCIDENTS)} />
-            <SidebarItem icon={UserCheck} label={t('ergonomics')} isActive={currentPage === Page.ERGONOMICS} onClick={() => setCurrentPage(Page.ERGONOMICS)} />
-          </div>
-          
-          <div>
-            <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('analytics')}</p>
-            {isAnalyst && <SidebarItem icon={BarChart2} label={t('reports')} isActive={currentPage === Page.REPORTS} onClick={() => setCurrentPage(Page.REPORTS)} />}
-          </div>
-
-          {isAdmin && (
-            <div className="mt-6">
-              <p className="px-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">{t('system')}</p>
-              <SidebarItem icon={Activity} label={t('cameras')} isActive={currentPage === Page.CAMERAS} onClick={() => setCurrentPage(Page.CAMERAS)} />
-              <SidebarItem icon={Cpu} label={t('health')} isActive={currentPage === Page.HEALTH} onClick={() => setCurrentPage(Page.HEALTH)} />
-              <SidebarItem icon={Users} label={t('users')} isActive={currentPage === Page.USERS} onClick={() => setCurrentPage(Page.USERS)} />
-              <SidebarItem icon={Settings} label={t('configuration')} isActive={currentPage === Page.CONFIGURATION} onClick={() => setCurrentPage(Page.CONFIGURATION)} />
-            </div>
-          )}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar px-2 pt-4" role="menu">
+          {navigationContent}
         </nav>
 
         <div className="p-4 border-t border-zinc-800 bg-[#09090b]">
@@ -297,29 +359,29 @@ const AppContent = () => {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#050505]">
-        <header className="h-16 bg-[#09090b]/90 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-6 z-20">
-          <div className="flex items-center">
+      <div dir={dir} className="min-w-0 flex-1 flex flex-col h-full overflow-hidden bg-[#050505]">
+        <header className="h-16 bg-[#09090b]/90 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between gap-3 px-4 sm:px-6 z-20">
+          <div className="min-w-0 flex items-center">
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
               aria-label={isSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
               aria-expanded={isSidebarOpen}
-              className={`p-2 -ms-2 rounded-md hover:bg-zinc-800 text-zinc-400 transition-colors me-4 ${a11yClasses.focusRing}`}
+              className={`md:hidden p-2 -ms-2 rounded-md hover:bg-zinc-800 text-zinc-400 transition-colors me-4 ${a11yClasses.focusRing}`}
             >
               <Menu size={20} aria-hidden="true" />
             </button>
-            <div className="flex flex-col">
-               <h1 className="text-sm font-bold text-white tracking-wide uppercase">{t(currentPage.toLowerCase().replace(/ /g, '') as any)}</h1>
+            <div className="min-w-0 flex flex-col">
+               <h1 className="truncate text-sm font-bold text-white tracking-wide uppercase">{t(currentPage.toLowerCase().replace(/ /g, '') as any)}</h1>
                <div className="flex items-center space-x-2 rtl:space-x-reverse">
                   <span className="flex h-2 w-2 relative" aria-hidden="true">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                   </span>
-                  <span className="text-[10px] text-zinc-400 font-mono uppercase">{t('systemActive')}</span>
+                  <span className="truncate text-[10px] text-zinc-400 font-mono uppercase">{t('systemActive')}</span>
                </div>
             </div>
           </div>
-          <div className="flex items-center space-x-4 rtl:space-x-reverse">
+          <div className="flex shrink-0 items-center space-x-2 sm:space-x-4 rtl:space-x-reverse">
             <button 
               onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')} 
               aria-label={`Switch language to ${language === 'en' ? 'Arabic' : 'English'}`}
@@ -355,7 +417,7 @@ const AppContent = () => {
                     aria-hidden="true"
                   />
                   <div 
-                    className="absolute top-12 end-0 w-96 bg-[#0f0f11] border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200"
+                    className="absolute top-12 end-0 w-[calc(100vw-2rem)] max-w-sm bg-[#0f0f11] border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200"
                     role="region"
                     aria-label="Notifications panel"
                     aria-live="polite"
@@ -409,7 +471,16 @@ const AppContent = () => {
             </div>
           </div>
         </header>
-        <main className="flex-1 overflow-hidden relative" role="main">
+        {isSidebarOpen && (
+          <nav
+            className="fixed inset-x-0 top-16 z-50 max-h-[calc(100vh-4rem)] overflow-y-auto border-b border-zinc-800 bg-[#09090b] px-2 py-4 shadow-2xl md:hidden"
+            role="menu"
+            aria-label="Mobile navigation"
+          >
+            {navigationContent}
+          </nav>
+        )}
+        <main className="min-w-0 flex-1 overflow-hidden relative" role="main">
           <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
         </main>
       </div>

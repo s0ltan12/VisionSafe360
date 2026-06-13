@@ -37,6 +37,7 @@ from ..analysis.event_aggregator import EventAggregator
 from ..analysis.calibration import CalibrationManager
 from ..analysis.track_quality import TrackQualityMonitor
 from ..alerts.alert_manager import AlertManager
+from ..alerts.frame_ring_buffer import FrameRingBuffer
 from ..alerts.fcm_service import FCMService
 from ..alerts.siren_controller import SirenController
 from ..integration.backend_client import BackendClient
@@ -86,9 +87,13 @@ Generated at: {ts}
 {forklift_section}
 
 ### Proximity hazard events
-Expected event types:
-- `forklift_proximity_warning`
-- `forklift_proximity_danger`
+Expected event type:
+- `forklift_proximity`
+
+Risk stage is carried in metadata:
+- `proximity_alert_stage`
+- `risk_level`
+- `risk_score`
 
 Observed samples:
 {hazard_section}
@@ -164,9 +169,11 @@ def _build_pipeline_context(
         )
 
     posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
-    proximity_analyzer = ProximityAnalyzer() if proximity_enabled else None
+    proximity_analyzer = ProximityAnalyzer(calibration_mgr=calibration_mgr) if proximity_enabled else None
     ppe_analyzer = PPEAnalyzer() if ppe_enabled else None
 
+    from ..config.settings import EVIDENCE_CLIP_ENABLED
+    frame_ring_buffer = FrameRingBuffer() if EVIDENCE_CLIP_ENABLED else None
     backend_client = BackendClient()
     fcm_service = FCMService()
     siren_controller = SirenController()
@@ -174,6 +181,12 @@ def _build_pipeline_context(
         backend_client=backend_client,
         fcm_service=fcm_service,
         siren_controller=siren_controller,
+        ring_buffer=frame_ring_buffer,
+    )
+    logger.info(
+        "evidence_clip pipeline configured: enabled=%s ring_buffer=%s",
+        EVIDENCE_CLIP_ENABLED,
+        frame_ring_buffer is not None,
     )
 
     fall_every_n = profile.get_sub_schedule("hazard_analyzer", "fall")
@@ -233,6 +246,7 @@ def _build_pipeline_context(
         worker_id=BACKEND_WORKER_ID or None,
         worker_gpu_id=BACKEND_WORKER_GPU_ID or None,
         alert_manager=alert_manager,
+        frame_ring_buffer=frame_ring_buffer,
         siren_controller=siren_controller,
         renderer=renderer,
         is_calibrated=is_calibrated,
