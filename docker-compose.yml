@@ -160,6 +160,7 @@ services:
       REDIS_STREAMING_HOST: redis-streaming
       APP_ENV: ${APP_ENV:-production}
       VISIONSAFE_BACKEND_URL: http://backend:8000
+      VISIONSAFE_BACKEND_INCIDENTS_PATH: /api/ingest/incident
       MEDIAMTX_URL: rtsp://mediamtx:8554
       SEED_DATA: ${SEED_DATA:-true}
       VISIONSAFE_WORKER_CAPACITY: ${VISIONSAFE_WORKER_CAPACITY:-1}
