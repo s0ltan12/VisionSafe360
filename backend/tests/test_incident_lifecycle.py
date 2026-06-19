@@ -10,13 +10,14 @@ os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 os.environ["SECRET_KEY"] = "test-secret-key-with-32-characters"
 
 from backend.app.config.database import Base, SessionLocal, engine
-from backend.app.models import Alert, Incident, IncidentEvent, Notification, User
-from backend.app.models.enums import IncidentStatusEnum, StatusEnum
+from backend.app.models import Alert, Camera, CameraSafetyZone, CameraSafetyZoneEvent, Incident, IncidentEvent, Notification, User
+from backend.app.models.enums import HazardTypeEnum, IncidentStatusEnum, StatusEnum
 from backend.app.schemas.ingest import HazardEventPayload
 from backend.app.schemas import IncidentCreate
 from backend.app.schemas.incident import IncidentUpdate
 from backend.app.services.ingest_service import IngestService
 from backend.app.services.incident_service import IncidentService
+from backend.app.services.safety_zone_service import SafetyZoneService
 from backend.app.services.sla_service import SLAService
 
 
@@ -215,6 +216,216 @@ def test_ingest_preserves_critical_and_creates_linked_alert_signal():
         assert alert is not None
         assert alert.severity.value == "Critical"
         assert alert.incident_id == incident.id
+
+
+def test_same_second_same_worker_ppe_ingest_creates_one_notification_thread():
+    with SessionLocal() as db:
+        base = {
+            "severity": "High",
+            "camera_id": "CAM-PPE-DEDUPE",
+            "timestamp": 1781713179.2,
+            "frame_number": 915,
+            "track_id": 1,
+        }
+
+        first = IngestService.process(
+            db,
+            HazardEventPayload(
+                **base,
+                event_type="ppe_missing",
+                description="PPE missing helmet, gloves track=1",
+                metadata={
+                    "worker_track_id": 1,
+                    "missing_ppe_items": ["helmet", "gloves"],
+                    "display_title": "PPE missing helmet, gloves",
+                },
+            ),
+        )
+        second = IngestService.process(
+            db,
+            HazardEventPayload(
+                **base,
+                event_type="ppe_missing_gloves",
+                description="PPE missing: gloves track=1",
+                metadata={"worker_track_id": 1, "ppe_item": "gloves"},
+            ),
+        )
+
+        assert first.status == "accepted"
+        assert second.status == "duplicate"
+        incident = db.query(Incident).filter(Incident.id == first.incident_id).first()
+        assert incident is not None
+        assert incident.classification == "PPE missing helmet, gloves"
+        alert = db.query(Alert).filter(Alert.incident_id == first.incident_id).first()
+        assert alert is not None
+        assert alert.description == "PPE missing helmet, gloves track=1"
+        notifications = (
+            db.query(Notification)
+            .filter(Notification.message.like(f"{first.incident_id}:%"))
+            .all()
+        )
+        assert len(notifications) == 1
+
+
+def test_safety_zone_ingest_creates_dashboard_alert_notification_and_zone_event():
+    with SessionLocal() as db:
+        db.add(
+            Camera(
+                id="CAM-ZONE-INGEST",
+                name="Zone Ingest Camera",
+                zone="Factory / Danger Zone",
+                status="Online",
+            )
+        )
+        db.add(
+            CameraSafetyZone(
+                id="CSZ-INGEST",
+                camera_id="CAM-ZONE-INGEST",
+                name="Danger Zone",
+                zone_type="danger",
+                polygon=[
+                    {"x": 100, "y": 100},
+                    {"x": 300, "y": 100},
+                    {"x": 300, "y": 300},
+                    {"x": 100, "y": 300},
+                ],
+                source_width=640,
+                source_height=480,
+                rules={"severity": "Critical", "cooldown_sec": 0},
+            )
+        )
+        db.commit()
+
+        payload = HazardEventPayload(
+            event_type="zone_person_entered",
+            severity="Critical",
+            camera_id="CAM-ZONE-INGEST",
+            timestamp=100.0,
+            frame_number=12,
+            track_id=7,
+            bbox=[140, 120, 180, 180],
+            description="Person entered danger zone: Danger Zone",
+            metadata={
+                "safety_zone": True,
+                "safety_zone_id": "CSZ-INGEST",
+                "safety_zone_name": "Danger Zone",
+                "zone_event_type": "enter",
+                "object_class": "person",
+                "stable_object_key": "person:7",
+                "anchor_point": {"x": 160, "y": 180},
+                "safety_zone_snapshot": {
+                    "id": "CSZ-INGEST",
+                    "name": "Danger Zone",
+                    "zone_type": "danger",
+                    "polygon": [
+                        {"x": 100, "y": 100},
+                        {"x": 300, "y": 100},
+                        {"x": 300, "y": 300},
+                        {"x": 100, "y": 300},
+                    ],
+                    "coordinate_space": "source_pixels",
+                    "source_width": 640,
+                    "source_height": 480,
+                    "color": "#f97316",
+                    "enabled": True,
+                    "priority": 100,
+                },
+            },
+        )
+
+        result = IngestService.process(db, payload)
+
+        assert result.status == "accepted"
+        alert = db.query(Alert).filter(Alert.id == result.alert_id).first()
+        assert alert is not None
+        assert alert.description == "Worker in danger zone: Danger Zone"
+        assert alert.type == HazardTypeEnum.Intrusion
+        assert alert.zone_id == "CSZ-INGEST"
+        assert alert.zone_name == "Danger Zone"
+        assert alert.status == StatusEnum.New
+        assert alert.event_metadata["safety_zone_snapshot"]["id"] == "CSZ-INGEST"
+        assert db.query(Notification).filter(Notification.message.like(f"{result.incident_id}:%")).count() == 1
+
+        zone_event = db.query(CameraSafetyZoneEvent).filter(
+            CameraSafetyZoneEvent.zone_id == "CSZ-INGEST",
+            CameraSafetyZoneEvent.alert_id == alert.id,
+        ).first()
+        assert zone_event is not None
+        assert zone_event.event_type == "enter"
+        assert zone_event.object_class == "person"
+        assert zone_event.track_id == 7
+
+
+def test_legacy_safety_zone_exit_payload_is_ignored():
+    with SessionLocal() as db:
+        payload = HazardEventPayload(
+            event_type="zone_exit",
+            severity="Medium",
+            camera_id="CAM-ZONE-INGEST",
+            timestamp=101.0,
+            frame_number=13,
+            track_id=7,
+            description="Person exit zone: Danger Zone",
+            metadata={
+                "safety_zone": True,
+                "safety_zone_id": "CSZ-INGEST",
+                "safety_zone_name": "Danger Zone",
+                "zone_event_type": "exit",
+                "object_class": "person",
+            },
+        )
+
+        result = IngestService.process(db, payload)
+
+        assert result.status == "ignored"
+        assert result.incident_id is None
+        assert result.alert_id is None
+
+
+def test_safety_zone_event_schema_accepts_fractional_dwell_duration():
+    with SessionLocal() as db:
+        if db.query(Camera).filter(Camera.id == "CAM-ZONE-FLOAT").first() is None:
+            db.add(
+                Camera(
+                    id="CAM-ZONE-FLOAT",
+                    name="Zone Float Camera",
+                    zone="Factory / Float Zone",
+                    status="Online",
+                )
+            )
+        if db.query(CameraSafetyZone).filter(CameraSafetyZone.id == "CSZ-FLOAT").first() is None:
+            db.add(
+                CameraSafetyZone(
+                    id="CSZ-FLOAT",
+                    camera_id="CAM-ZONE-FLOAT",
+                    name="Float Zone",
+                    zone_type="danger",
+                    polygon=[
+                        {"x": 0, "y": 0},
+                        {"x": 100, "y": 0},
+                        {"x": 100, "y": 100},
+                    ],
+                    source_width=640,
+                    source_height=480,
+                    rules={},
+                )
+            )
+        SafetyZoneService.record_event(
+            db,
+            zone_id="CSZ-FLOAT",
+            camera_id="CAM-ZONE-FLOAT",
+            event_type="dwell_time_exceeded",
+            object_class="person",
+            track_id=4,
+            stable_object_key="person:4",
+            severity="High",
+            occurred_at=datetime.now(timezone.utc),
+            duration_inside_sec=1.386,
+        )
+        db.commit()
+
+        event = SafetyZoneService.list_events(db, camera_id="CAM-ZONE-FLOAT")[0]
+        assert event.duration_inside_sec == 1.386
 
 
 def test_incident_lifecycle_commands_sync_linked_alert_signal():

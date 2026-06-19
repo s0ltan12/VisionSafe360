@@ -141,9 +141,10 @@ class SafetyOverlayRenderer:
         if cfg.enable_pose and pose_results is not None:
             self._pose.draw(frame, pose_results, degraded=self._degraded)
 
-        # 4 ── Hazard severity overlays
-        if cfg.enable_hazards and hazard_events:
-            self._hazards.draw(frame, hazard_events, calibrated, display_id_map)
+        # 4 ── Hazard severity overlays (draw runs every frame so the box can
+        #      linger for hazard_hold_sec after the event clears)
+        if cfg.enable_hazards:
+            self._hazards.draw(frame, hazard_events or [], calibrated, display_id_map, now=ts)
 
         # 5 ── Worker info panels
         if cfg.enable_worker_panels:

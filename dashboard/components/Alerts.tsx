@@ -12,10 +12,11 @@ import {
   AlertTriangle,
   ImageOff,
 } from 'lucide-react';
-import { Alert as AlertType, AlertEvent, Severity, Status, HazardType } from '../types';
+import { Alert as AlertType, AlertEvent, CameraSafetyZone, Severity, Status, HazardType } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AlertsAPI } from '../api';
 import { a11yClasses } from '../utils/accessibility';
+import SafetyZonesOverlay from './SafetyZonesOverlay';
 
 const StatusPill = ({ status }: { status: Status }) => {
   const styles: Record<string, string> = {
@@ -107,6 +108,38 @@ const EvidencePlaceholder = ({ compact = false }: { compact?: boolean }) => (
   </div>
 );
 
+const zoneFromSnapshot = (value: unknown, cameraId?: string | null): CameraSafetyZone | null => {
+  if (!value || typeof value !== 'object') return null;
+  const snapshot = value as Record<string, any>;
+  const polygon = Array.isArray(snapshot.polygon)
+    ? snapshot.polygon.map((point: any) => ({ x: Number(point?.x), y: Number(point?.y) }))
+    : [];
+  if (polygon.length < 3 || polygon.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    return null;
+  }
+  return {
+    id: String(snapshot.id ?? 'snapshot-zone'),
+    cameraId: String(snapshot.camera_id ?? snapshot.cameraId ?? cameraId ?? ''),
+    name: String(snapshot.name ?? 'Safety Zone'),
+    zoneType: String(snapshot.zone_type ?? snapshot.zoneType ?? 'custom') as CameraSafetyZone['zoneType'],
+    polygon,
+    coordinateSpace: String(snapshot.coordinate_space ?? snapshot.coordinateSpace ?? 'source_pixels'),
+    sourceWidth: Number(snapshot.source_width ?? snapshot.sourceWidth ?? 1280),
+    sourceHeight: Number(snapshot.source_height ?? snapshot.sourceHeight ?? 720),
+    color: String(snapshot.color ?? '#f97316'),
+    enabled: true,
+    priority: Number(snapshot.priority ?? 100),
+    rules: {
+      allowedClasses: ['person', 'forklift'],
+      deniedClasses: [],
+      requiredPpe: [],
+      cooldownSec: 30,
+      minPersistenceSec: 0.5,
+      severity: 'High',
+    },
+  };
+};
+
 const AlertDetails = ({
   alert,
   onClose,
@@ -125,6 +158,11 @@ const AlertDetails = ({
 	  const { t } = useLanguage();
 	  const [videoFailed, setVideoFailed] = useState(false);
 	  const [previewFrame, setPreviewFrame] = useState<string | null>(null);
+	  const cameraZones = useMemo(() => {
+	    const snapshot = zoneFromSnapshot(alert.eventMetadata?.safety_zone_snapshot, alert.cameraId);
+	    return snapshot ? [snapshot] : [];
+	  }, [alert.eventMetadata, alert.cameraId]);
+	  const shouldRenderZoneOverlay = cameraZones.length > 0 && alert.eventMetadata?.evidence_has_safety_zone_overlay !== true;
 	  const hasVideoEvidence = Boolean(alert.videoEvidence) && !videoFailed;
 	  const exactEventFrame = alert.eventFrame || alert.thumbnail || null;
 	  const hasEvidence = hasVideoEvidence || Boolean(exactEventFrame);
@@ -133,7 +171,7 @@ const AlertDetails = ({
   useEffect(() => {
     setVideoFailed(false);
   }, [alert.id, alert.videoEvidence]);
-  
+
   return (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-label={`Alert details: ${alert.id}`}>
 	    <div className="bg-[#0f0f11] rounded-lg border border-zinc-800 shadow-2xl w-full max-w-[min(96vw,96rem)] h-[90vh] flex flex-col overflow-hidden">
@@ -147,11 +185,14 @@ const AlertDetails = ({
 	          >
 	            <X size={20} aria-hidden="true" />
 	          </button>
-	          <img
-	            src={previewFrame}
-	            alt={`Opened exact event frame: ${alert.type} at ${alert.zone}`}
-	            className="max-h-[92vh] max-w-[96vw] object-contain"
-	          />
+	          <div className="relative inline-block max-h-[92vh] max-w-[96vw] bg-black">
+	            <img
+	              src={previewFrame}
+	              alt={`Opened exact event frame: ${alert.type} at ${alert.zone}`}
+	              className="block max-h-[92vh] max-w-[96vw] object-contain"
+	            />
+              {shouldRenderZoneOverlay && <SafetyZonesOverlay zones={cameraZones} />}
+	          </div>
 	        </div>
 	      )}
 	      <div className="h-16 px-6 border-b border-zinc-800 flex justify-between items-center bg-[#0f0f11] flex-shrink-0">
@@ -211,18 +252,19 @@ const AlertDetails = ({
 	                 <button
 	                   type="button"
 	                   onClick={() => setPreviewFrame(exactEventFrame)}
-	                   className="h-full w-full cursor-zoom-in bg-black"
+	                   className="relative h-full w-full cursor-zoom-in bg-black"
 	                   aria-label="Open alert evidence frame"
 	                 >
 	                   <img
 	                     src={exactEventFrame}
 	                     alt={`Alert evidence frame: ${alert.type} incident at ${alert.zone}`}
-	                     className="w-full h-full object-cover opacity-90"
+	                     className="h-full w-full object-contain opacity-90"
 	                   />
 	                 </button>
-	               ) : (
+               ) : (
                  <EvidencePlaceholder />
                )}
+               {hasEvidence && shouldRenderZoneOverlay && <SafetyZonesOverlay zones={cameraZones} />}
                <div className="absolute top-4 start-4 bg-black/70 backdrop-blur px-3 py-1.5 rounded border border-white/10 flex items-center space-x-2 rtl:space-x-reverse">
                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
                   <span className="text-white text-xs font-mono uppercase tracking-tighter">{hasVideoEvidence ? '3s Evidence Clip' : hasEvidence ? 'Evidence Capture' : 'Alert Record'} • {alert.timestamp}</span>
@@ -253,7 +295,7 @@ const AlertDetails = ({
 	                       <button
 	                         type="button"
 	                         onClick={() => setPreviewFrame(exactEventFrame)}
-	                         className="h-full w-full cursor-zoom-in bg-black"
+	                         className="relative h-full w-full cursor-zoom-in bg-black"
 	                         aria-label="Open exact event frame"
 	                       >
 	                         <img
@@ -261,6 +303,7 @@ const AlertDetails = ({
 	                           alt={`Exact annotated event frame: ${alert.type} at ${alert.zone}`}
 	                           className="h-full w-full object-contain"
 	                         />
+                          {shouldRenderZoneOverlay && <SafetyZonesOverlay zones={cameraZones} />}
 	                       </button>
 	                     ) : (
                        <EvidencePlaceholder compact />

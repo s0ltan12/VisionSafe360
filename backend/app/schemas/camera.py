@@ -22,6 +22,7 @@ class CameraBase(BaseModel):
     location_description: Optional[str] = None
     supported_ai_capabilities: Optional[list[str]] = None
     severity_profile: Optional[str] = None
+    ai_alert_cooldown_sec: Optional[float] = Field(default=None, ge=0, le=3600)
     status: str = "Online"
     is_privacy_mode: bool = False
     thumbnail: Optional[str] = None
@@ -59,6 +60,7 @@ class CameraUpdate(BaseModel):
     location_description: Optional[str] = None
     supported_ai_capabilities: Optional[list[str]] = None
     severity_profile: Optional[str] = None
+    ai_alert_cooldown_sec: Optional[float] = Field(default=None, ge=0, le=3600)
     status: Optional[str] = None
     is_privacy_mode: Optional[bool] = None
     fps: Optional[float] = None

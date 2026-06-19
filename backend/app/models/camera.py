@@ -28,6 +28,7 @@ class Camera(Base):
     location_description = Column(Text, nullable=True)
     supported_ai_capabilities = Column(JSON, nullable=True)
     severity_profile = Column(String, nullable=True)
+    ai_alert_cooldown_sec = Column(Float, nullable=True)
     status         = Column(String, default="Online")
     is_privacy_mode = Column(Boolean, default=False)
     thumbnail      = Column(String, nullable=True)

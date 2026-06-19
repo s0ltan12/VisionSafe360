@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   Eye,
   EyeOff,
+  Info,
   Loader2,
   Plus,
   Save,
@@ -15,6 +16,7 @@ import { SafetyZonesAPI } from '../api';
 import {
   Camera,
   CameraSafetyZone,
+  PPERequirement,
   SafetyZoneEvent,
   SafetyZoneRule,
   SafetyZoneStats,
@@ -23,28 +25,143 @@ import {
   ZonePoint,
 } from '../types';
 
-const ZONE_TYPES: Array<{ value: SafetyZoneType; label: string }> = [
-  { value: 'danger', label: 'Danger Zone' },
-  { value: 'restricted', label: 'Restricted Area' },
-  { value: 'forklift_only', label: 'Forklift Only' },
-  { value: 'pedestrian_only', label: 'Pedestrian Only' },
-  { value: 'no_entry', label: 'No Entry' },
-  { value: 'loading', label: 'Loading Area' },
-  { value: 'emergency_exit', label: 'Emergency Exit' },
-  { value: 'custom', label: 'Custom' },
-];
-
-const DEFAULT_RULES: SafetyZoneRule = {
-  allowedClasses: ['person', 'forklift'],
-  deniedClasses: [],
-  occupancyThreshold: null,
-  dwellTimeLimitSec: null,
-  cooldownSec: 30,
-  minPersistenceSec: 0.5,
-  severity: 'High',
+type ZoneTypeConfig = {
+  value: SafetyZoneType;
+  label: string;
+  description: string;
+  rules: SafetyZoneRule;
+  locked: boolean;
 };
 
+const makeRules = (
+  allowedClasses: Array<'person' | 'forklift'>,
+  occupancyThreshold: number | null,
+  dwellTimeLimitSec: number | null,
+  severity: Severity,
+  cooldownSec: number
+): SafetyZoneRule => {
+  const supported: Array<'person' | 'forklift'> = ['person', 'forklift'];
+  return {
+    allowedClasses,
+    deniedClasses: supported.filter(item => !allowedClasses.includes(item)),
+    requiredPpe: [],
+    occupancyThreshold,
+    dwellTimeLimitSec,
+    cooldownSec,
+    minPersistenceSec: 0.5,
+    severity,
+  };
+};
+
+const ZONE_TYPE_CONFIG: Record<SafetyZoneType, ZoneTypeConfig> = {
+  danger: {
+    value: 'danger',
+    label: 'Danger Zone',
+    description: 'Critical area where any detected person or forklift presence should alert quickly.',
+    rules: makeRules(['person', 'forklift'], 0, 3, 'Critical', 5),
+    locked: true,
+  },
+  no_entry: {
+    value: 'no_entry',
+    label: 'No Entry',
+    description: 'Fully restricted area. People and forklifts are not allowed.',
+    rules: makeRules([], 0, 0, 'Critical', 0),
+    locked: true,
+  },
+  forklift_only: {
+    value: 'forklift_only',
+    label: 'Forklift Only',
+    description: 'Forklift operating lane or work area. Person entry is a violation.',
+    rules: makeRules(['forklift'], 1, 0, 'High', 10),
+    locked: true,
+  },
+  pedestrian_only: {
+    value: 'pedestrian_only',
+    label: 'Pedestrian Only',
+    description: 'Pedestrian walkway. Forklift entry is a violation.',
+    rules: makeRules(['person'], null, 0, 'High', 15),
+    locked: true,
+  },
+  restricted: {
+    value: 'restricted',
+    label: 'Restricted Area',
+    description: 'Controlled area where presence is allowed, but long dwell time is monitored.',
+    rules: makeRules(['person', 'forklift'], null, 30, 'Medium', 30),
+    locked: true,
+  },
+  loading: {
+    value: 'loading',
+    label: 'Loading Area',
+    description: 'Shared loading or unloading zone with higher operational risk.',
+    rules: makeRules(['person', 'forklift'], null, 10, 'High', 20),
+    locked: true,
+  },
+  emergency_exit: {
+    value: 'emergency_exit',
+    label: 'Emergency Exit',
+    description: 'Exit path that must stay clear at all times.',
+    rules: makeRules([], 0, 0, 'Critical', 0),
+    locked: true,
+  },
+  ppe: {
+    value: 'ppe',
+    label: 'PPE Zone',
+    description: 'Access is allowed, with PPE compliance monitored by the safety pipeline.',
+    rules: makeRules(['person', 'forklift'], null, 15, 'Medium', 25),
+    locked: true,
+  },
+  ppe_required: {
+    value: 'ppe_required',
+    label: 'PPE-Required',
+    description: 'Access is allowed, with PPE compliance monitored by the safety pipeline.',
+    rules: makeRules(['person', 'forklift'], null, 15, 'Medium', 25),
+    locked: true,
+  },
+  maintenance: {
+    value: 'maintenance',
+    label: 'Maintenance Zone',
+    description: 'Temporary work zone with limited occupancy and longer dwell tolerance.',
+    rules: makeRules(['person', 'forklift'], 4, 60, 'Medium', 30),
+    locked: true,
+  },
+  custom: {
+    value: 'custom',
+    label: 'Custom',
+    description: 'Manual policy for site-specific cases. All rule fields are editable.',
+    rules: makeRules(['person', 'forklift'], null, 10, 'Medium', 30),
+    locked: false,
+  },
+};
+
+const ZONE_TYPES = [
+  ZONE_TYPE_CONFIG.danger,
+  ZONE_TYPE_CONFIG.no_entry,
+  ZONE_TYPE_CONFIG.forklift_only,
+  ZONE_TYPE_CONFIG.pedestrian_only,
+  ZONE_TYPE_CONFIG.restricted,
+  ZONE_TYPE_CONFIG.loading,
+  ZONE_TYPE_CONFIG.emergency_exit,
+  ZONE_TYPE_CONFIG.ppe_required,
+  ZONE_TYPE_CONFIG.maintenance,
+  ZONE_TYPE_CONFIG.custom,
+];
+
+const DEFAULT_RULES = ZONE_TYPE_CONFIG.danger.rules;
+
+const PPE_REQUIREMENT_OPTIONS: Array<{ value: PPERequirement; label: string }> = [
+  { value: 'helmet', label: 'Helmet' },
+  { value: 'vest', label: 'Safety Vest' },
+  { value: 'gloves', label: 'Gloves' },
+  { value: 'safety_glasses', label: 'Safety Glasses' },
+  { value: 'face_mask', label: 'Face Mask' },
+  { value: 'safety_shoes', label: 'Safety Shoes' },
+  { value: 'protective_suit', label: 'Protective Suit' },
+  { value: 'ear_protection', label: 'Ear Protection' },
+];
+
 const inputClass = 'w-full rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white outline-none focus:border-vs-orange';
+
+const lockedInputClass = (locked: boolean) => `${inputClass} ${locked ? 'cursor-not-allowed text-zinc-400 focus:border-zinc-800' : ''}`;
 
 interface Props {
   camera: Camera;
@@ -81,22 +198,39 @@ const CameraZoneManager = ({ camera, onClose }: Props) => {
 
   const selected = useMemo(() => zones.find(zone => zone.id === selectedId) ?? null, [zones, selectedId]);
   const selectedStats = useMemo(() => stats.find(item => item.zoneId === selectedId) ?? null, [stats, selectedId]);
+  const selectedType = draft.zoneType ?? 'danger';
+  const selectedTypeConfig = ZONE_TYPE_CONFIG[selectedType] ?? ZONE_TYPE_CONFIG.custom;
+  const rulesLocked = selectedTypeConfig.locked;
+  const isPpeZone = selectedType === 'ppe_required' || selectedType === 'ppe';
+  const operationalRulesLocked = rulesLocked && !isPpeZone;
 
   const refresh = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [zoneRows, eventRows, statRows] = await Promise.all([
-        SafetyZonesAPI.listForCamera(camera.id),
+      const zoneRows = await SafetyZonesAPI.listForCamera(camera.id);
+      const normalizedZones = zoneRows.map(applyLockedTypeRules);
+      setZones(normalizedZones);
+      if (!selectedId && normalizedZones.length > 0) {
+        setSelectedId(normalizedZones[0].id);
+        setDraft(normalizedZones[0]);
+      }
+
+      const [eventResult, statResult] = await Promise.allSettled([
         SafetyZonesAPI.eventsForCamera(camera.id),
         SafetyZonesAPI.statsForCamera(camera.id),
       ]);
-      setZones(zoneRows);
-      setEvents(eventRows);
-      setStats(statRows);
-      if (!selectedId && zoneRows.length > 0) {
-        setSelectedId(zoneRows[0].id);
-        setDraft(zoneRows[0]);
+      if (eventResult.status === 'fulfilled') {
+        setEvents(eventResult.value);
+      } else {
+        setEvents([]);
+        setError(eventResult.reason?.message || 'Failed to load safety zone events.');
+      }
+      if (statResult.status === 'fulfilled') {
+        setStats(statResult.value);
+      } else {
+        setStats([]);
+        setError(prev => prev ?? (statResult.reason?.message || 'Failed to load safety zone stats.'));
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load safety zones');
@@ -108,7 +242,7 @@ const CameraZoneManager = ({ camera, onClose }: Props) => {
   useEffect(() => { void refresh(); }, [camera.id]);
 
   useEffect(() => {
-    if (selected) setDraft(selected);
+    if (selected) setDraft(applyLockedTypeRules(selected));
   }, [selected?.id]);
 
   const startNewZone = () => {
@@ -147,8 +281,9 @@ const CameraZoneManager = ({ camera, onClose }: Props) => {
       const saved = draft.id
         ? await SafetyZonesAPI.update(draft.id, payload)
         : await SafetyZonesAPI.create(camera.id, payload);
-      setSelectedId(saved.id);
-      setDraft(saved);
+      const normalizedSaved = applyLockedTypeRules(saved);
+      setSelectedId(normalizedSaved.id);
+      setDraft(normalizedSaved);
       setDrawing(false);
       await refresh();
     } catch (err: any) {
@@ -168,12 +303,32 @@ const CameraZoneManager = ({ camera, onClose }: Props) => {
 
   const toggleZone = async (zone: CameraSafetyZone) => {
     const updated = await SafetyZonesAPI.setEnabled(zone.id, !zone.enabled);
-    setZones(prev => prev.map(item => item.id === updated.id ? updated : item));
-    if (selectedId === updated.id) setDraft(updated);
+    const normalizedUpdated = applyLockedTypeRules(updated);
+    setZones(prev => prev.map(item => item.id === normalizedUpdated.id ? normalizedUpdated : item));
+    if (selectedId === normalizedUpdated.id) setDraft(normalizedUpdated);
+  };
+
+  const handleZoneTypeChange = (zoneType: SafetyZoneType) => {
+    const config = ZONE_TYPE_CONFIG[zoneType] ?? ZONE_TYPE_CONFIG.custom;
+    const previousRequiredPpe = draft.rules?.requiredPpe ?? [];
+    setDraft(prev => ({
+      ...prev,
+      zoneType,
+      rules: { ...config.rules, requiredPpe: (zoneType === 'ppe_required' || zoneType === 'ppe') ? previousRequiredPpe : [] },
+    }));
   };
 
   const updateRules = (patch: Partial<SafetyZoneRule>) => {
-    setDraft(prev => ({ ...prev, rules: { ...(prev.rules ?? DEFAULT_RULES), ...patch } }));
+    if (operationalRulesLocked && !('requiredPpe' in patch)) return;
+    setDraft(prev => ({ ...prev, rules: normalizeRules({ ...(prev.rules ?? ZONE_TYPE_CONFIG.custom.rules), ...patch }) }));
+  };
+
+  const togglePpeRequirement = (item: PPERequirement, checked: boolean) => {
+    const current = draft.rules?.requiredPpe ?? [];
+    const next = checked
+      ? Array.from(new Set([...current, item]))
+      : current.filter(value => value !== item);
+    updateRules({ requiredPpe: next });
   };
 
   const polygonPoints = (points: ZonePoint[] = []) => points.map(point => `${point.x},${point.y}`).join(' ');
@@ -311,40 +466,84 @@ const CameraZoneManager = ({ camera, onClose }: Props) => {
                 <input value={draft.name ?? ''} onChange={e => setDraft(prev => ({ ...prev, name: e.target.value }))} className={inputClass} />
               </Field>
               <Field label="Type">
-                <select value={draft.zoneType ?? 'danger'} onChange={e => setDraft(prev => ({ ...prev, zoneType: e.target.value as SafetyZoneType }))} className={inputClass}>
-                  {ZONE_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+                <select value={selectedType} onChange={e => handleZoneTypeChange(e.target.value as SafetyZoneType)} className={inputClass}>
+                  {ZONE_TYPES.map(type => <option key={type.value} value={type.value}>{type.label} - {type.description}</option>)}
                 </select>
               </Field>
+              <div className="rounded-lg border border-zinc-800 bg-black/60 px-3 py-2">
+                <div className="flex items-start gap-2">
+                  <Info size={14} className="mt-0.5 shrink-0 text-vs-orange" />
+                  <div>
+                    <p className="text-xs font-bold text-zinc-200">{selectedTypeConfig.label}</p>
+                    <p className="mt-0.5 text-xs leading-5 text-zinc-500">{selectedTypeConfig.description}</p>
+                    {rulesLocked && !isPpeZone && (
+                      <p className="mt-1 text-[11px] text-zinc-600">Rules are controlled by this Zone Type. Choose Custom to edit them manually.</p>
+                    )}
+                    {isPpeZone && (
+                      <p className="mt-1 text-[11px] text-zinc-600">PPE requirements and operational limits are editable for this Zone Type.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Color">
                   <input type="color" value={draft.color ?? '#f97316'} onChange={e => setDraft(prev => ({ ...prev, color: e.target.value }))} className="h-10 w-full rounded bg-black border border-zinc-800" />
                 </Field>
                 <Field label="Severity">
-                  <select value={draft.rules?.severity ?? 'High'} onChange={e => updateRules({ severity: e.target.value as Severity })} className={inputClass}>
+                  <select value={draft.rules?.severity ?? selectedTypeConfig.rules.severity} onChange={e => updateRules({ severity: e.target.value as Severity })} disabled={rulesLocked} className={lockedInputClass(rulesLocked)}>
                     {['Low', 'Medium', 'High', 'Critical'].map(level => <option key={level}>{level}</option>)}
                   </select>
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Occupancy">
-                  <input type="number" value={draft.rules?.occupancyThreshold ?? ''} onChange={e => updateRules({ occupancyThreshold: e.target.value ? Number(e.target.value) : null })} className={inputClass} />
+                  <input type="number" min={0} placeholder="Unlimited" value={draft.rules?.occupancyThreshold ?? ''} onChange={e => updateRules({ occupancyThreshold: e.target.value ? Number(e.target.value) : null })} disabled={operationalRulesLocked} className={lockedInputClass(operationalRulesLocked)} />
                 </Field>
                 <Field label="Dwell Sec">
-                  <input type="number" value={draft.rules?.dwellTimeLimitSec ?? ''} onChange={e => updateRules({ dwellTimeLimitSec: e.target.value ? Number(e.target.value) : null })} className={inputClass} />
+                  <input type="number" min={0} value={draft.rules?.dwellTimeLimitSec ?? ''} onChange={e => updateRules({ dwellTimeLimitSec: e.target.value ? Number(e.target.value) : null })} disabled={operationalRulesLocked} className={lockedInputClass(operationalRulesLocked)} />
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Cooldown">
-                  <input type="number" value={draft.rules?.cooldownSec ?? 30} onChange={e => updateRules({ cooldownSec: Number(e.target.value) })} className={inputClass} />
+                  <input type="number" min={0} value={draft.rules?.cooldownSec ?? selectedTypeConfig.rules.cooldownSec} onChange={e => updateRules({ cooldownSec: Number(e.target.value) })} disabled={operationalRulesLocked} className={lockedInputClass(operationalRulesLocked)} />
                 </Field>
                 <Field label="Priority">
                   <input type="number" value={draft.priority ?? 100} onChange={e => setDraft(prev => ({ ...prev, priority: Number(e.target.value) }))} className={inputClass} />
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <ClassToggle label="Allow People" checked={draft.rules?.allowedClasses?.includes('person') ?? true} onChange={checked => updateRules({ allowedClasses: toggleClass(draft.rules?.allowedClasses ?? [], 'person', checked) })} />
-                <ClassToggle label="Allow Forklifts" checked={draft.rules?.allowedClasses?.includes('forklift') ?? true} onChange={checked => updateRules({ allowedClasses: toggleClass(draft.rules?.allowedClasses ?? [], 'forklift', checked) })} />
+                <ClassToggle label="Allow People" checked={draft.rules?.allowedClasses?.includes('person') ?? true} disabled={operationalRulesLocked} onChange={checked => updateRules({ allowedClasses: toggleClass(draft.rules?.allowedClasses ?? [], 'person', checked) })} />
+                <ClassToggle label="Allow Forklifts" checked={draft.rules?.allowedClasses?.includes('forklift') ?? true} disabled={operationalRulesLocked} onChange={checked => updateRules({ allowedClasses: toggleClass(draft.rules?.allowedClasses ?? [], 'forklift', checked) })} />
               </div>
+              {isPpeZone && (
+                <div className="rounded-lg border border-zinc-800 bg-black/60 p-3">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">PPE Requirements</p>
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">Alerts are generated only for selected items missing inside this zone.</p>
+                    </div>
+                    <span className="shrink-0 rounded border border-vs-orange/30 bg-vs-orange/10 px-2 py-1 text-[10px] font-bold text-vs-orange">
+                      {draft.rules?.requiredPpe?.length ?? 0} selected
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {PPE_REQUIREMENT_OPTIONS.map(option => {
+                      const checked = draft.rules?.requiredPpe?.includes(option.value) ?? false;
+                      return (
+                        <label key={option.value} className={`flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-vs-orange/40 bg-vs-orange/10 text-vs-orange' : 'border-zinc-800 bg-black text-zinc-400'}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={event => togglePpeRequirement(option.value, event.target.checked)}
+                            className="h-4 w-4 rounded border-zinc-700 bg-black accent-vs-orange"
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="flex gap-2 pt-2">
                 <button onClick={saveDraft} disabled={saving} className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-vs-orange px-4 py-2 text-sm font-bold text-black disabled:opacity-60">
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save
@@ -381,11 +580,12 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
   </label>
 );
 
-const ClassToggle = ({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) => (
+const ClassToggle = ({ label, checked, disabled = false, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) => (
   <button
     type="button"
+    disabled={disabled}
     onClick={() => onChange(!checked)}
-    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-zinc-800 bg-black text-zinc-500'}`}
+    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-zinc-800 bg-black text-zinc-500'} ${disabled ? 'cursor-not-allowed' : ''}`}
   >
     {checked && <Check size={13} />} {label}
   </button>
@@ -396,6 +596,33 @@ function toggleClass(values: Array<'person' | 'forklift'>, item: 'person' | 'for
   if (enabled) set.add(item);
   else set.delete(item);
   return Array.from(set);
+}
+
+function normalizeRules(rules: SafetyZoneRule): SafetyZoneRule {
+  const supported: Array<'person' | 'forklift'> = ['person', 'forklift'];
+  const allowedClasses = Array.from(new Set(rules.allowedClasses ?? []));
+  return {
+    ...rules,
+    allowedClasses,
+    deniedClasses: supported.filter(item => !allowedClasses.includes(item)),
+    requiredPpe: Array.from(new Set(rules.requiredPpe ?? [])),
+  };
+}
+
+function applyLockedTypeRules<T extends Partial<CameraSafetyZone>>(zone: T): T {
+  const zoneType = zone.zoneType ?? 'custom';
+  const config = ZONE_TYPE_CONFIG[zoneType] ?? ZONE_TYPE_CONFIG.custom;
+  if (!config.locked) return zone;
+  if (zoneType === 'ppe_required' || zoneType === 'ppe') {
+    return {
+      ...zone,
+      rules: normalizeRules({ ...config.rules, ...(zone.rules ?? {}) }),
+    };
+  }
+  return {
+    ...zone,
+    rules: { ...config.rules, requiredPpe: zone.rules?.requiredPpe ?? [] },
+  };
 }
 
 export default CameraZoneManager;

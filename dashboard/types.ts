@@ -5,7 +5,8 @@ export type IncidentStatus = 'New' | 'Validating' | 'Active' | 'Acknowledged' | 
 export type HazardType = 'PPE' | 'Fall' | 'Proximity' | 'Overspeed' | 'Ergonomics' | 'Intrusion';
 export type UserRole = 'Admin' | 'Safety Engineer' | 'Data Analyst';
 export type ErgonomicRiskLevel = 'Low' | 'Medium' | 'High' | 'Critical';
-export type SafetyZoneType = 'danger' | 'restricted' | 'forklift_only' | 'pedestrian_only' | 'no_entry' | 'loading' | 'emergency_exit' | 'custom';
+export type SafetyZoneType = 'danger' | 'restricted' | 'forklift_only' | 'pedestrian_only' | 'no_entry' | 'loading' | 'emergency_exit' | 'ppe' | 'ppe_required' | 'maintenance' | 'custom';
+export type PPERequirement = 'helmet' | 'vest' | 'gloves' | 'safety_glasses' | 'face_mask' | 'safety_shoes' | 'protective_suit' | 'ear_protection';
 
 export interface ZonePoint {
   x: number;
@@ -15,6 +16,7 @@ export interface ZonePoint {
 export interface SafetyZoneRule {
   allowedClasses: Array<'person' | 'forklift'>;
   deniedClasses: Array<'person' | 'forklift'>;
+  requiredPpe: PPERequirement[];
   occupancyThreshold?: number | null;
   dwellTimeLimitSec?: number | null;
   cooldownSec: number;
@@ -110,6 +112,7 @@ export interface Alert {
   falsePositiveBy?: string | null;
   falsePositiveById?: string | null;
   falsePositiveAt?: string | null;
+  eventMetadata?: Record<string, unknown> | null;
 }
 
 export interface AlertEvent {
@@ -162,6 +165,7 @@ export interface Camera {
   locationDescription?: string | null;
   supportedAiCapabilities?: string[] | null;
   severityProfile?: string | null;
+  aiAlertCooldownSec?: number | null;
   url?: string;
   stream_url?: string;  // RTSP URL, filename, or webcam-index string
   source_type?: CameraSourceType | null;
@@ -212,6 +216,7 @@ export interface DemoVideo {
   streamUrl: string;
   sourceType?: CameraSourceType;
   cameraId?: string;
+  thumbnail?: string;
 }
 
 export interface JobStatus {

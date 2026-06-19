@@ -24,7 +24,11 @@ class UISettings:
     enable_hazards:       bool  = True
     enable_worker_panels: bool  = True
     enable_hud:           bool  = True
-    enable_banners:       bool  = True
+    # Toast notification card on the video is disabled: the real alert
+    # pipeline (backend events, push, siren, dashboard) is unaffected. The
+    # on-frame hazard is conveyed by the severity-coloured box around the
+    # worker (detections + hazards layers).
+    enable_banners:       bool  = False
 
     # ── Detections layer ─────────────────────────────────────────────
     # show_raw_track_ids=True shows un-remapped ByteTrack IDs in labels
@@ -47,6 +51,11 @@ class UISettings:
     hazard_fill_critical: bool  = True    # fill with red for CRITICAL severity
     hazard_fill_high:     bool  = True    # fill with orange for HIGH severity
     hazard_fill_medium:   bool  = False   # border-only for MEDIUM (less noisy)
+    # Keep the worker hazard box/label visible for this many extra seconds
+    # after the hazard last appeared, so a dashboard operator can notice it
+    # even if detection briefly flickers. UI-only — does not affect the real
+    # alert pipeline (backend events, push, siren).
+    hazard_hold_sec:      float = 1.0
 
     # ── Banner layer ──────────────────────────────────────────────────
     banner_critical_sec: float = 3.0     # total banner visible duration (s)

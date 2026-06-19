@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 import uuid
+import yaml
 from contextlib import asynccontextmanager
 from functools import partial
 
@@ -44,9 +45,11 @@ starlette_concurrency.run_in_threadpool = _run_in_threadpool_inline
 from backend.app import main as app_main
 from backend.app.api.routes import incidents as incidents_route
 from backend.app.config.database import Base, SessionLocal, engine
-from backend.app.models import Alert, User
+from backend.app.models import Alert, Camera, User
 from backend.app.services.login_rate_limit_service import login_rate_limit_service
 from backend.app.services.rate_limit_service import rate_limit_service
+from backend.app.services import job_service as job_service_module
+from backend.app.services.worker_tasks import _build_dynamic_profile
 from backend.app.utils.security import hash_password
 
 
@@ -76,6 +79,9 @@ class ASGIClientAdapter:
 
 	def patch(self, url: str, **kwargs):
 		return self.request("PATCH", url, **kwargs)
+
+	def put(self, url: str, **kwargs):
+		return self.request("PUT", url, **kwargs)
 
 	def delete(self, url: str, **kwargs):
 		return self.request("DELETE", url, **kwargs)
@@ -239,6 +245,256 @@ class BackendAPITestCase(unittest.TestCase):
 
 		resolve = self.client.patch("/api/incidents/INC-RBAC-VIEWER/resolve", headers=viewer_headers)
 		self.assertEqual(resolve.status_code, 403)
+
+	def test_safety_zone_type_applies_locked_defaults(self):
+		with SessionLocal() as db:
+			if db.query(Camera).filter(Camera.id == "CAM-ZONES").first() is None:
+				db.add(Camera(id="CAM-ZONES", name="Zone Camera", zone="Factory / Test", status="Online"))
+				db.commit()
+
+		create_zone = self.client.post(
+			"/api/cameras/CAM-ZONES/safety-zones",
+			headers=self.auth_headers,
+			json={
+				"name": "Forklift Lane",
+				"zone_type": "forklift_only",
+				"polygon": [{"x": 0, "y": 0}, {"x": 100, "y": 0}, {"x": 100, "y": 100}],
+				"source_width": 1280,
+				"source_height": 720,
+				"rules": {
+					"allowed_classes": ["person", "forklift"],
+					"denied_classes": [],
+					"occupancy_threshold": 9,
+					"dwell_time_limit_sec": 99,
+					"cooldown_sec": 99,
+					"severity": "Low",
+				},
+			},
+		)
+		self.assertEqual(create_zone.status_code, 201)
+		zone = create_zone.json()
+		self.assertEqual(zone["rules"]["allowed_classes"], ["forklift"])
+		self.assertEqual(zone["rules"]["denied_classes"], ["person"])
+		self.assertEqual(zone["rules"]["occupancy_threshold"], 1)
+		self.assertEqual(zone["rules"]["dwell_time_limit_sec"], 0)
+		self.assertEqual(zone["rules"]["cooldown_sec"], 10)
+		self.assertEqual(zone["rules"]["severity"], "High")
+
+		custom_denied_all = self.client.patch(
+			f"/api/safety-zones/{zone['id']}",
+			headers=self.auth_headers,
+			json={
+				"zone_type": "custom",
+				"rules": {
+					"allowed_classes": [],
+					"denied_classes": ["person", "forklift"],
+					"occupancy_threshold": 0,
+					"dwell_time_limit_sec": 0,
+					"cooldown_sec": 0,
+					"severity": "Critical",
+				},
+			},
+		)
+		self.assertEqual(custom_denied_all.status_code, 422)
+
+	def test_ppe_zone_required_ppe_validation_and_persistence(self):
+		with SessionLocal() as db:
+			if db.query(Camera).filter(Camera.id == "CAM-PPE-ZONES").first() is None:
+				db.add(Camera(id="CAM-PPE-ZONES", name="PPE Zone Camera", zone="Factory / PPE", status="Online"))
+				db.commit()
+
+		create_zone = self.client.post(
+			"/api/cameras/CAM-PPE-ZONES/safety-zones",
+			headers=self.auth_headers,
+			json={
+				"name": "Helmet and Glasses",
+				"zone_type": "ppe_required",
+				"polygon": [{"x": 0, "y": 0}, {"x": 100, "y": 0}, {"x": 100, "y": 100}],
+				"source_width": 1280,
+				"source_height": 720,
+				"required_ppe": ["helmet", "safety-vest", "goggles"],
+				"rules": {
+					"allowed_classes": [],
+					"denied_classes": ["person", "forklift"],
+					"required_ppe": ["gloves"],
+					"occupancy_threshold": 2,
+					"dwell_time_limit_sec": 9,
+					"cooldown_sec": 999,
+					"severity": "Low",
+				},
+			},
+		)
+		self.assertEqual(create_zone.status_code, 201)
+		zone = create_zone.json()
+		self.assertEqual(zone["required_ppe"], ["helmet", "vest", "safety_glasses"])
+		self.assertEqual(zone["rules"]["required_ppe"], ["helmet", "vest", "safety_glasses"])
+		self.assertEqual(zone["rules"]["allowed_classes"], [])
+		self.assertEqual(zone["rules"]["denied_classes"], ["person", "forklift"])
+		self.assertEqual(zone["rules"]["occupancy_threshold"], 2)
+		self.assertEqual(zone["rules"]["dwell_time_limit_sec"], 9)
+		self.assertEqual(zone["rules"]["cooldown_sec"], 999)
+		self.assertEqual(zone["rules"]["severity"], "Low")
+
+		list_response = self.client.get("/api/cameras/CAM-PPE-ZONES/safety-zones", headers=self.auth_headers)
+		self.assertEqual(list_response.status_code, 200)
+		listed = next(item for item in list_response.json() if item["id"] == zone["id"])
+		self.assertEqual(listed["required_ppe"], ["helmet", "vest", "safety_glasses"])
+
+		edge_response = self.client.get("/api/edge/cameras/CAM-PPE-ZONES/safety-zones", headers=self.auth_headers)
+		self.assertEqual(edge_response.status_code, 200)
+		edge_zone = next(item for item in edge_response.json()["zones"] if item["id"] == zone["id"])
+		self.assertEqual(edge_zone["rules"]["required_ppe"], ["helmet", "vest", "safety_glasses"])
+		self.assertEqual(edge_zone["rules"]["occupancy_threshold"], 2)
+		self.assertEqual(edge_zone["rules"]["dwell_time_limit_sec"], 9)
+		self.assertEqual(edge_zone["rules"]["cooldown_sec"], 999)
+
+		update_zone = self.client.patch(
+			f"/api/safety-zones/{zone['id']}",
+			headers=self.auth_headers,
+			json={
+				"required_ppe": ["gloves", "face mask"],
+				"rules": {
+					"allowed_classes": ["person"],
+					"denied_classes": ["forklift"],
+					"occupancy_threshold": 4,
+					"dwell_time_limit_sec": 30,
+					"cooldown_sec": 12,
+					"severity": "High",
+				},
+			},
+		)
+		self.assertEqual(update_zone.status_code, 200)
+		self.assertEqual(update_zone.json()["required_ppe"], ["gloves", "face_mask"])
+		self.assertEqual(update_zone.json()["rules"]["allowed_classes"], ["person"])
+		self.assertEqual(update_zone.json()["rules"]["denied_classes"], ["forklift"])
+		self.assertEqual(update_zone.json()["rules"]["occupancy_threshold"], 4)
+		self.assertEqual(update_zone.json()["rules"]["dwell_time_limit_sec"], 30)
+		self.assertEqual(update_zone.json()["rules"]["cooldown_sec"], 12)
+		self.assertEqual(update_zone.json()["rules"]["severity"], "High")
+
+		clear_zone = self.client.patch(
+			f"/api/safety-zones/{zone['id']}",
+			headers=self.auth_headers,
+			json={"required_ppe": None},
+		)
+		self.assertEqual(clear_zone.status_code, 200)
+		self.assertEqual(clear_zone.json()["required_ppe"], [])
+
+		put_zone = self.client.put(
+			f"/api/safety-zones/{zone['id']}",
+			headers=self.auth_headers,
+			json={"required_ppe": ["ear protection", "boots"]},
+		)
+		self.assertEqual(put_zone.status_code, 200)
+		self.assertEqual(put_zone.json()["required_ppe"], ["ear_protection", "safety_shoes"])
+		self.assertEqual(put_zone.json()["rules"]["required_ppe"], ["ear_protection", "safety_shoes"])
+
+	def test_ppe_zone_rejects_invalid_and_duplicate_required_ppe(self):
+		with SessionLocal() as db:
+			if db.query(Camera).filter(Camera.id == "CAM-PPE-VALIDATION").first() is None:
+				db.add(Camera(id="CAM-PPE-VALIDATION", name="PPE Validation Camera", zone="Factory / PPE", status="Online"))
+				db.commit()
+
+		base_payload = {
+			"name": "Invalid PPE",
+			"zone_type": "ppe_required",
+			"polygon": [{"x": 0, "y": 0}, {"x": 100, "y": 0}, {"x": 100, "y": 100}],
+			"source_width": 1280,
+			"source_height": 720,
+		}
+		invalid = self.client.post(
+			"/api/cameras/CAM-PPE-VALIDATION/safety-zones",
+			headers=self.auth_headers,
+			json={**base_payload, "required_ppe": ["helmet", "cape"]},
+		)
+		self.assertEqual(invalid.status_code, 422)
+
+		duplicate = self.client.post(
+			"/api/cameras/CAM-PPE-VALIDATION/safety-zones",
+			headers=self.auth_headers,
+			json={**base_payload, "required_ppe": ["vest", "safety_vest"]},
+		)
+		self.assertEqual(duplicate.status_code, 422)
+
+	def test_camera_start_passes_selected_ai_profile_to_worker_job(self):
+		class FakeLock:
+			def __enter__(self):
+				return self
+
+			def __exit__(self, exc_type, exc, tb):
+				return False
+
+		class FakeStateConnection:
+			def lock(self, *args, **kwargs):
+				return FakeLock()
+
+		class FakeQueue:
+			name = "test-queue"
+
+			def enqueue(self, func, *, kwargs, **options):
+				self.kwargs = kwargs
+				self.options = options
+				return type("FakeJob", (), {"id": "job-ai-profile"})()
+
+		fake_queue = FakeQueue()
+		original_queue = job_service_module.get_job_queue
+		original_state_connection = job_service_module.get_state_connection
+		original_select_worker = job_service_module.select_worker
+		original_set_state = job_service_module.set_job_state
+		original_get_state = job_service_module.get_job_state
+		original_cancel = job_service_module.JobService._cancel_pending_jobs_for_camera
+		try:
+			job_service_module.get_job_queue = lambda queue_name: fake_queue
+			job_service_module.get_state_connection = lambda: FakeStateConnection()
+			job_service_module.select_worker = lambda: None
+			job_service_module.set_job_state = lambda *args, **kwargs: None
+			job_service_module.get_job_state = lambda camera_id: {}
+			job_service_module.JobService._cancel_pending_jobs_for_camera = lambda self, camera_id, exclude_job_id=None: None
+
+			with SessionLocal() as db:
+				camera = db.query(Camera).filter(Camera.id == "CAM-AI-PROFILE").first()
+				if camera is None:
+					db.add(
+						Camera(
+							id="CAM-AI-PROFILE",
+							name="AI Profile Camera",
+							zone="Factory / Forklift Lane",
+							stream_url="v1.mp4",
+							source_type="file",
+							severity_profile="custom:proximity+ergonomics",
+							supported_ai_capabilities=["proximity", "ergonomics"],
+							ai_alert_cooldown_sec=12,
+						)
+					)
+				else:
+					camera.stream_url = "v1.mp4"
+					camera.source_type = "file"
+					camera.severity_profile = "custom:proximity+ergonomics"
+					camera.supported_ai_capabilities = ["proximity", "ergonomics"]
+					camera.ai_alert_cooldown_sec = 12
+				db.commit()
+
+			response = self.client.post("/api/cameras/CAM-AI-PROFILE/start", headers=self.auth_headers)
+			self.assertEqual(response.status_code, 200)
+			self.assertEqual(fake_queue.kwargs["edge_capabilities"], ["proximity", "ergonomics"])
+			self.assertEqual(fake_queue.kwargs["edge_alert_cooldown_sec"], 12)
+		finally:
+			job_service_module.get_job_queue = original_queue
+			job_service_module.get_state_connection = original_state_connection
+			job_service_module.select_worker = original_select_worker
+			job_service_module.set_job_state = original_set_state
+			job_service_module.get_job_state = original_get_state
+			job_service_module.JobService._cancel_pending_jobs_for_camera = original_cancel
+
+	def test_dynamic_worker_profile_contains_dashboard_cooldown(self):
+		profile_path = _build_dynamic_profile(["ppe", "fall", "ergonomics"], "full_suite", 17)
+		with open(profile_path, "r", encoding="utf-8") as handle:
+			profile = yaml.safe_load(handle)
+
+		self.assertEqual(profile["alert_policy"]["cooldown_sec"], 17.0)
+		self.assertTrue(profile["modules"]["ppe_analyzer"]["enabled"])
+		self.assertTrue(profile["modules"]["hazard_analyzer"]["sub_modules"]["fall"]["enabled"])
+		self.assertTrue(profile["modules"]["posture_analyzer"]["enabled"])
 
 
 if __name__ == "__main__":

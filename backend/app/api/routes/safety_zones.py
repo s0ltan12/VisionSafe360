@@ -51,6 +51,18 @@ def get_safety_zone(zone_id: str, db: Session = Depends(get_db)):
     return zone
 
 
+def _update_safety_zone(
+    zone_id: str,
+    payload: SafetyZoneUpdate,
+    db: Session,
+    current_user: User,
+):
+    zone = SafetyZoneService.update(db, zone_id, payload, actor_id=current_user.id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Safety zone not found")
+    return zone
+
+
 @router.patch(
     "/safety-zones/{zone_id}",
     response_model=SafetyZoneOut,
@@ -62,10 +74,21 @@ def update_safety_zone(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin", "operator")),
 ):
-    zone = SafetyZoneService.update(db, zone_id, payload, actor_id=current_user.id)
-    if zone is None:
-        raise HTTPException(status_code=404, detail="Safety zone not found")
-    return zone
+    return _update_safety_zone(zone_id, payload, db, current_user)
+
+
+@router.put(
+    "/safety-zones/{zone_id}",
+    response_model=SafetyZoneOut,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+def replace_safety_zone(
+    zone_id: str,
+    payload: SafetyZoneUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("admin", "operator")),
+):
+    return _update_safety_zone(zone_id, payload, db, current_user)
 
 
 @router.patch(

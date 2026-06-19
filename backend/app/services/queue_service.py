@@ -57,7 +57,7 @@ def get_queue_connection() -> Redis:
     RQ stores pickled bytes payloads, so decode_responses must stay disabled.
     """
 
-    socket_timeout = float(os.getenv("REDIS_QUEUE_SOCKET_TIMEOUT", os.getenv("REDIS_SOCKET_TIMEOUT", "300")))
+    socket_timeout = float(os.getenv("REDIS_QUEUE_SOCKET_TIMEOUT", os.getenv("REDIS_SOCKET_TIMEOUT", "600")))
     return _redis_client(
         purpose="queue",
         db=_redis_db_for("queue", 0),

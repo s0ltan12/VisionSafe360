@@ -74,6 +74,32 @@ _RED_MK    = (0, 0, 200)
 _GRAY_MK   = (160, 160, 160)
 
 
+def _ppe_missing_items(event: HazardEvent) -> list[str]:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    raw = metadata.get("missing_ppe_items") or metadata.get("ppe_items")
+    if isinstance(raw, (list, tuple)):
+        return [str(item).replace("_", " ").strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [raw.replace("_", " ").strip()]
+    ppe_item = metadata.get("ppe_item")
+    if ppe_item:
+        return [str(ppe_item).replace("_", " ").strip()]
+    event_type = (event.event_type or "").lower()
+    if "ppe_missing_" in event_type:
+        item = event_type.split("ppe_missing_", 1)[-1].replace("_", " ").strip()
+        return [item] if item else []
+    return []
+
+
+def _hazard_panel_lines(event: HazardEvent) -> list[str]:
+    """Return compact worker-card hazard lines for one event."""
+    ppe_items = _ppe_missing_items(event)
+    if ppe_items:
+        return [f"PPE {item} missing".upper()[:22] for item in ppe_items]
+    short = (event.event_type or "hazard").replace("_", " ").upper()
+    return [short[:22]]
+
+
 # ── Position smoother ───────────────────────────────────────────────
 
 class _PositionSmoother:
@@ -343,7 +369,7 @@ class WorkerPanelLayer:
                     cv2.addWeighted(bg, 0.75, frame, 0.25, 0, frame)
 
                 # Per-panel rendering
-                for person, tid, did, conf, ppe, haz, px, py, pw, ph in specs:
+                for person, tid, did, conf, ppe, haz, hazard_lines, px, py, pw, ph in specs:
                     cv2.rectangle(frame, (px, py), (px + pw, py + ph), _ORANGE, 2)
                     bx1, by1, bx2, by2 = person.bbox
                     conn_x = bx1 if (px + pw) < bx1 else bx2
@@ -430,21 +456,25 @@ class WorkerPanelLayer:
                         ty += row_h
 
                     # Hazards (optional)
-                    if haz:
+                    if hazard_lines:
                         sep_y2 = ty - 8
                         cv2.line(
                             frame, (px + pad, sep_y2), (px + pw - pad, sep_y2), _GRAY_MK, 1
                         )
-                        for ev in haz:
+                        line_rows: list[tuple[HazardEvent, str]] = [
+                            (ev, line)
+                            for ev in haz
+                            for line in _hazard_panel_lines(ev)
+                        ][:4]
+                        for ev, line in line_rows:
                             hc = {
                                 Severity.CRITICAL: (0, 0, 220),
                                 Severity.HIGH: _ORANGE,
                                 Severity.MEDIUM: (0, 200, 200),
                             }.get(ev.severity, _GRAY_MK)
-                            short = ev.event_type.replace("_", " ").upper()[:18]
                             cv2.putText(
                                 frame,
-                                f"[!] {short}",
+                                f"[!] {line}",
                                 (px + pad, ty),
                                 font,
                                 sm * 0.9,
@@ -502,11 +532,16 @@ class WorkerPanelLayer:
 
             haz = sorted(wk_ev.get(tid, []),
                          key=lambda e: e.severity, reverse=True)[:2]
+            hazard_lines = [
+                line
+                for ev in haz
+                for line in _hazard_panel_lines(ev)
+            ][:4]
 
             # Rows: header + confidence + sep + "Equipped PPEs:" + items
             n_rows = 2 + 1 + len(_PPE_ITEMS)
-            if haz:
-                n_rows += 1 + len(haz)
+            if hazard_lines:
+                n_rows += 1 + len(hazard_lines)
             panel_h = n_rows * row_h + pad * 2
 
             # Raw placement (with side-lock to prevent L/R flip)
@@ -522,7 +557,7 @@ class WorkerPanelLayer:
             py = max(0, min(py, fh - panel_h))
 
             occupied.append((px, py, px + panel_w, py + panel_h))
-            specs.append((person, tid, did, conf, ppe, haz,
+            specs.append((person, tid, did, conf, ppe, haz, hazard_lines,
                           px, py, panel_w, panel_h))
 
         # Cache rendered specs for short track-loss re-renders.
@@ -541,7 +576,7 @@ class WorkerPanelLayer:
             cv2.addWeighted(bg, 0.75, frame, 0.25, 0, frame)
 
         # ── Per-panel rendering ────────────────────────────────────────
-        for person, tid, did, conf, ppe, haz, px, py, pw, ph in specs:
+        for person, tid, did, conf, ppe, haz, hazard_lines, px, py, pw, ph in specs:
             # Orange border
             cv2.rectangle(frame, (px, py), (px + pw, py + ph), _ORANGE, 2)
 
@@ -598,18 +633,22 @@ class WorkerPanelLayer:
                 ty += row_h
 
             # Hazards
-            if haz:
+            if hazard_lines:
                 sep_y2 = ty - 8
                 cv2.line(frame, (px + pad, sep_y2), (px + pw - pad, sep_y2),
                          _GRAY_MK, 1)
-                for ev in haz:
+                line_rows: list[tuple[HazardEvent, str]] = [
+                    (ev, line)
+                    for ev in haz
+                    for line in _hazard_panel_lines(ev)
+                ][:4]
+                for ev, line in line_rows:
                     hc = {
                         Severity.CRITICAL: (0, 0, 220),
                         Severity.HIGH:     _ORANGE,
                         Severity.MEDIUM:   (0, 200, 200),
                     }.get(ev.severity, _GRAY_MK)
-                    short = ev.event_type.replace("_", " ").upper()[:18]
-                    cv2.putText(frame, f"[!] {short}",
+                    cv2.putText(frame, f"[!] {line}",
                                 (tx, ty), font, sm * 0.9, hc, 1, cv2.LINE_AA)
                     ty += row_h
 

@@ -46,6 +46,11 @@ def seed() -> None:
                 "WHERE source_type IS NULL AND stream_url IS NOT NULL "
                 "AND stream_url NOT LIKE '%://%'"
             ))
+            conn.execute(text(
+                "UPDATE cameras SET thumbnail = '/api/media/thumbnails/' || stream_url "
+                "WHERE source_type = 'file' AND thumbnail IS NULL "
+                "AND stream_url IS NOT NULL"
+            ))
             conn.commit()
         print("[seed] Migration: source columns ensured on cameras table.")
     except Exception as exc:
@@ -144,21 +149,25 @@ def seed() -> None:
                zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
                is_privacy_mode=False, fps=0, health=100,
                location_description="Demo file source seeded by backend.",
+               thumbnail="/api/media/thumbnails/v1.mp4",
                stream_url="v1.mp4", source_type="file"),
         Camera(id="DEMO-V2", name="Demo Stream — v2", area_id="AREA-FACTORY", area_name="Demo Lab",
                zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
                is_privacy_mode=False, fps=0, health=100,
                location_description="Demo file source seeded by backend.",
+               thumbnail="/api/media/thumbnails/v2.mp4",
                stream_url="v2.mp4", source_type="file"),
         Camera(id="DEMO-V3", name="Demo Stream — v3", area_id="AREA-FACTORY", area_name="Demo Lab",
                zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
                is_privacy_mode=False, fps=0, health=100,
                location_description="Demo file source seeded by backend.",
+               thumbnail="/api/media/thumbnails/v3.mp4",
                stream_url="v3.mp4", source_type="file"),
         Camera(id="DEMO-V4", name="Demo Stream — v4", area_id="AREA-FACTORY", area_name="Demo Lab",
                zone_id=None, zone_name="Test Feed", zone="Demo / Test Feed", status="Online",
                is_privacy_mode=False, fps=0, health=100,
                location_description="Demo file source seeded by backend.",
+               thumbnail="/api/media/thumbnails/v4.mp4",
                stream_url="v4.mp4", source_type="file"),
     ]
 

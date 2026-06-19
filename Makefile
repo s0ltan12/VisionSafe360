@@ -3,7 +3,8 @@
 # Always target the system Docker daemon. Docker Desktop on Linux runs in a VM
 # and cannot pass through the host NVIDIA GPU.
 DOCKER = docker --context default
-COMPOSE = $(DOCKER) compose
+ENV_FILE ?= backend/.env
+COMPOSE = $(DOCKER) compose --env-file $(ENV_FILE)
 
 build: check-gpu
 	$(COMPOSE) up --build -d --remove-orphans
@@ -63,4 +64,3 @@ shell:
 
 exp-req:
 	uv export --format requirements-txt --no-hashes > backend/requirements.txt
-

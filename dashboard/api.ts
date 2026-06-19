@@ -19,6 +19,7 @@ import {
   JobStatus,
   NotificationRecord,
   CameraSafetyZone,
+  PPERequirement,
   SafetyZoneEvent,
   SafetyZoneRule,
   SafetyZoneStats,
@@ -129,6 +130,7 @@ function toFrontendCamera(c: any): Camera {
     locationDescription: c.location_description ?? c.locationDescription ?? null,
     supportedAiCapabilities: Array.isArray(c.supported_ai_capabilities) ? c.supported_ai_capabilities : (Array.isArray(c.supportedAiCapabilities) ? c.supportedAiCapabilities : null),
     severityProfile: c.severity_profile ?? c.severityProfile ?? null,
+    aiAlertCooldownSec: c.ai_alert_cooldown_sec ?? c.aiAlertCooldownSec ?? null,
     url:           c.url,
     stream_url:    c.stream_url,
     source_type:   c.source_type ?? c.sourceType ?? null,
@@ -136,7 +138,7 @@ function toFrontendCamera(c: any): Camera {
     deviceIndex:   c.device_index ?? c.deviceIndex ?? null,
     status:        c.status,
     isPrivacyMode: c.is_privacy_mode,
-    thumbnail:     c.thumbnail,
+    thumbnail:     toAssetUrl(c.thumbnail) ?? '',
     fps:           c.fps,
     health:        c.health,
   };
@@ -146,6 +148,7 @@ function toFrontendZoneRule(rule: any): SafetyZoneRule {
   return {
     allowedClasses: Array.isArray(rule?.allowed_classes) ? rule.allowed_classes : (Array.isArray(rule?.allowedClasses) ? rule.allowedClasses : ['person', 'forklift']),
     deniedClasses: Array.isArray(rule?.denied_classes) ? rule.denied_classes : (Array.isArray(rule?.deniedClasses) ? rule.deniedClasses : []),
+    requiredPpe: normalizePpeRequirements(rule?.required_ppe ?? rule?.requiredPpe ?? []),
     occupancyThreshold: rule?.occupancy_threshold ?? rule?.occupancyThreshold ?? null,
     dwellTimeLimitSec: rule?.dwell_time_limit_sec ?? rule?.dwellTimeLimitSec ?? null,
     cooldownSec: Number(rule?.cooldown_sec ?? rule?.cooldownSec ?? 30),
@@ -155,9 +158,17 @@ function toFrontendZoneRule(rule: any): SafetyZoneRule {
 }
 
 function toBackendZoneRule(rule: SafetyZoneRule): any {
+  const supportedClasses: Array<'person' | 'forklift'> = ['person', 'forklift'];
+  const allowed = Array.isArray(rule.allowedClasses) ? rule.allowedClasses : supportedClasses;
+  const explicitDenied = Array.isArray(rule.deniedClasses) ? rule.deniedClasses : [];
+  const denied = Array.from(new Set([
+    ...explicitDenied,
+    ...supportedClasses.filter(item => !allowed.includes(item)),
+  ]));
   return {
-    allowed_classes: rule.allowedClasses,
-    denied_classes: rule.deniedClasses,
+    allowed_classes: allowed,
+    denied_classes: denied,
+    required_ppe: normalizePpeRequirements(rule.requiredPpe ?? []),
     occupancy_threshold: rule.occupancyThreshold ?? null,
     dwell_time_limit_sec: rule.dwellTimeLimitSec ?? null,
     cooldown_sec: rule.cooldownSec,
@@ -179,7 +190,10 @@ function toFrontendSafetyZone(zone: any): CameraSafetyZone {
     color: String(zone.color ?? '#f97316'),
     enabled: Boolean(zone.enabled ?? true),
     priority: Number(zone.priority ?? 100),
-    rules: toFrontendZoneRule(zone.rules ?? {}),
+    rules: toFrontendZoneRule({
+      ...(zone.rules ?? {}),
+      required_ppe: zone.required_ppe ?? zone.requiredPpe ?? zone.rules?.required_ppe ?? zone.rules?.requiredPpe,
+    }),
     description: zone.description ?? null,
     createdAt: zone.created_at ?? zone.createdAt ?? null,
     updatedAt: zone.updated_at ?? zone.updatedAt ?? null,
@@ -199,8 +213,30 @@ function toBackendSafetyZone(zone: Partial<CameraSafetyZone>): any {
   if (zone.enabled !== undefined) body.enabled = zone.enabled;
   if (zone.priority !== undefined) body.priority = zone.priority;
   if (zone.rules !== undefined) body.rules = toBackendZoneRule(zone.rules);
+  if (zone.rules?.requiredPpe !== undefined) body.required_ppe = normalizePpeRequirements(zone.rules.requiredPpe);
   if (zone.description !== undefined) body.description = zone.description;
   return body;
+}
+
+const PPE_REQUIREMENTS: PPERequirement[] = [
+  'helmet',
+  'vest',
+  'gloves',
+  'safety_glasses',
+  'face_mask',
+  'safety_shoes',
+  'protective_suit',
+  'ear_protection',
+];
+
+function normalizePpeRequirements(value: unknown): PPERequirement[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set<string>(PPE_REQUIREMENTS);
+  return Array.from(new Set(
+    value
+      .map(item => String(item ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_'))
+      .filter((item): item is PPERequirement => allowed.has(item))
+  ));
 }
 
 function toFrontendSafetyZoneEvent(event: any): SafetyZoneEvent {
@@ -259,6 +295,9 @@ function toAssetUrl(value: string | null | undefined): string | null {
   const evidenceIndex = value.indexOf(evidencePath);
   if (evidenceIndex >= 0) {
     return appendQueryParam(`${BASE_URL}${value.slice(evidenceIndex)}`, 'ev', EVIDENCE_ASSET_VERSION);
+  }
+  if (value.startsWith('/api/media/thumbnails/')) {
+    return appendAuthToken(`${BASE_URL}${value}`);
   }
   return value;
 }
@@ -391,6 +430,7 @@ function toFrontendAlert(a: any): Alert {
     falsePositiveBy: a.false_positive_by ?? a.falsePositiveBy ?? null,
     falsePositiveById: a.false_positive_by_id ?? a.falsePositiveById ?? null,
     falsePositiveAt: a.false_positive_at ?? a.falsePositiveAt ?? null,
+    eventMetadata: a.event_metadata ?? a.eventMetadata ?? null,
   };
 }
 
@@ -694,6 +734,10 @@ export const CamerasAPI = {
       body.severity_profile = camera.severityProfile;
       delete body.severityProfile;
     }
+    if (camera.aiAlertCooldownSec !== undefined) {
+      body.ai_alert_cooldown_sec = camera.aiAlertCooldownSec;
+      delete body.aiAlertCooldownSec;
+    }
     if (camera.mediamtxPath !== undefined) {
       body.mediamtx_path = camera.mediamtxPath;
       delete body.mediamtxPath;
@@ -792,6 +836,10 @@ export const CamerasAPI = {
       body.severity_profile = changes.severityProfile;
       delete body.severityProfile;
     }
+    if (changes.aiAlertCooldownSec !== undefined) {
+      body.ai_alert_cooldown_sec = changes.aiAlertCooldownSec;
+      delete body.aiAlertCooldownSec;
+    }
     if (changes.mediamtxPath !== undefined) {
       body.mediamtx_path = changes.mediamtxPath;
       delete body.mediamtxPath;
@@ -832,6 +880,7 @@ export const CamerasAPI = {
         streamUrl,
         sourceType,
         type: sourceType === 'file' ? 'upload' : undefined,
+        thumbnail: cam.thumbnail || undefined,
       };
     });
   },

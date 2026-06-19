@@ -4,6 +4,8 @@ import {
 	CheckSquare,
 	Clock,
 	Cpu,
+	Eye,
+	EyeOff,
 	FastForward,
 	Grid,
 	Layers,
@@ -25,12 +27,14 @@ import {
 	CamerasAPI,
 	IncidentsAPI,
 	JobsAPI,
+	SafetyZonesAPI,
 	WS_BASE_URL,
 	getAIStreamUrl,
 	getAuthToken,
 } from '../api';
-import { DemoVideo, Incident, JobStatus } from '../types';
+import { CameraSafetyZone, DemoVideo, Incident, JobStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import SafetyZonesOverlay from './SafetyZonesOverlay';
 
 const layoutButtonClass = (active: boolean) =>
 	`p-2 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
@@ -125,6 +129,7 @@ interface MultiAiStreamState {
 }
 
 const makeMultiCameraId = (video: DemoVideo, index: number) => {
+	if (video.cameraId) return video.cameraId;
 	const safeId = video.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 28) || `source_${index + 1}`;
 	return `multi_${index + 1}_${safeId}`;
 };
@@ -134,7 +139,10 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const timeoutRef = useRef<number | null>(null);
 	const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-	const previewSrc = video.streamUrl;
+	const thumbnail = video.thumbnail;
+	const isFile = !video.sourceType || video.sourceType === 'file';
+	// <video>-based capture only works for file sources (live cameras have WS URLs)
+	const previewSrc = !thumbnail && isFile ? video.streamUrl : '';
 
 	const drawPreview = useCallback(() => {
 		const element = videoRef.current;
@@ -159,6 +167,10 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 	}, []);
 
 	useEffect(() => {
+		if (thumbnail) {
+			setState('ready');
+			return undefined;
+		}
 		setState('loading');
 		if (timeoutRef.current !== null) {
 			window.clearTimeout(timeoutRef.current);
@@ -177,7 +189,21 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 				timeoutRef.current = null;
 			}
 		};
-	}, [previewSrc]);
+	}, [previewSrc, thumbnail]);
+
+	if (thumbnail) {
+		return (
+			<div className="relative aspect-video overflow-hidden bg-zinc-950">
+				<img
+					src={thumbnail}
+					alt={video.name}
+					className="h-full w-full object-cover opacity-80 transition-opacity group-hover:opacity-100"
+					loading="lazy"
+					onError={() => setState('error')}
+				/>
+			</div>
+		);
+	}
 
 	return (
 		<div className="relative aspect-video overflow-hidden bg-zinc-950">
@@ -186,31 +212,33 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 				className={`h-full w-full object-cover transition-opacity ${state === 'ready' ? 'opacity-75 group-hover:opacity-90' : 'opacity-0'}`}
 				aria-hidden="true"
 			/>
-			<video
-				ref={videoRef}
-				src={previewSrc}
-				className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
-				muted
-				playsInline
-				preload="auto"
-				onLoadedMetadata={(event) => {
-					const element = event.currentTarget;
-					if (Number.isFinite(element.duration) && element.duration > 0) {
-						const previewTime = Math.min(1.25, Math.max(0.1, element.duration * 0.12));
-						if (Math.abs(element.currentTime - previewTime) > 0.05) {
-							element.currentTime = previewTime;
+			{previewSrc && (
+				<video
+					ref={videoRef}
+					src={previewSrc}
+					className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
+					muted
+					playsInline
+					preload="auto"
+					onLoadedMetadata={(event) => {
+						const element = event.currentTarget;
+						if (Number.isFinite(element.duration) && element.duration > 0) {
+							const previewTime = Math.min(1.25, Math.max(0.1, element.duration * 0.12));
+							if (Math.abs(element.currentTime - previewTime) > 0.05) {
+								element.currentTime = previewTime;
+							} else {
+								drawPreview();
+							}
 						} else {
 							drawPreview();
 						}
-					} else {
-						drawPreview();
-					}
-				}}
-				onLoadedData={drawPreview}
-				onCanPlay={drawPreview}
-				onSeeked={drawPreview}
-				onError={() => setState('error')}
-			/>
+					}}
+					onLoadedData={drawPreview}
+					onCanPlay={drawPreview}
+					onSeeked={drawPreview}
+					onError={() => setState('error')}
+				/>
+			)}
 			{state !== 'ready' && (
 				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-950 text-zinc-600">
 					{state === 'loading' ? <Loader2 size={18} className="animate-spin" aria-hidden="true" /> : <Video size={22} aria-hidden="true" />}
@@ -355,11 +383,31 @@ const LiveMonitoring = () => {
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [isMaximized, setIsMaximized] = useState(false);
 	const [aiSessionActive, setAiSessionActive] = useState(false);
+	const [cameraZones, setCameraZones] = useState<CameraSafetyZone[]>([]);
+	const [showZones, setShowZones] = useState(true);
 	const [multiAiSessionActive, setMultiAiSessionActive] = useState(false);
 
 	const selectedVideo = useMemo(
 		() => videos.find((video) => video.id === selectedVideoId) ?? null,
 		[videos, selectedVideoId],
+	);
+
+	useEffect(() => {
+		const cameraId = selectedVideo?.cameraId;
+		if (!cameraId) {
+			setCameraZones([]);
+			return;
+		}
+		let cancelled = false;
+		SafetyZonesAPI.listForCamera(cameraId)
+			.then((zones) => { if (!cancelled) setCameraZones(zones); })
+			.catch(() => { if (!cancelled) setCameraZones([]); });
+		return () => { cancelled = true; };
+	}, [selectedVideo?.cameraId]);
+
+	const visibleZones = useMemo(
+		() => (showZones ? cameraZones.filter((z) => z.enabled && z.polygon.length >= 3) : []),
+		[cameraZones, showZones],
 	);
 	const selectedMultiVideos = useMemo(
 		() => selectedMultiVideoIds
@@ -379,7 +427,7 @@ const LiveMonitoring = () => {
 		[multiStreamDescriptors],
 	);
 
-	const activeCameraId = jobStatus.cameraId || 'cam_01';
+	const activeCameraId = jobStatus.cameraId || selectedVideo?.cameraId || selectedVideo?.id || 'cam_01';
 	const recentIncidents = useMemo(() => incidents.slice(0, 10), [incidents]);
 
 	const upsertIncident = useCallback((incident: Incident) => {
@@ -465,7 +513,7 @@ const LiveMonitoring = () => {
 		image.src = imageUrl;
 	}, []);
 
-	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = 'cam_01') => {
+	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = video.cameraId || video.id) => {
 		const status = await JobsAPI.start(video.fileName, cameraId);
 		setJobStatus(status);
 		setJobError(null);
@@ -526,7 +574,7 @@ const LiveMonitoring = () => {
 			}
 			setAiState('starting');
 			setAiSessionActive(true);
-			await startJobForVideo(selectedVideo, 'cam_01');
+			await startJobForVideo(selectedVideo);
 		} catch (error: any) {
 			if (viewMode === 'ai') {
 				setAiSessionActive(false);
@@ -1018,6 +1066,21 @@ const LiveMonitoring = () => {
 									<Square size={12} fill="currentColor" aria-hidden="true" />
 									{t('stop')}
 								</button>
+								{cameraZones.length > 0 && (
+									<button
+										type="button"
+										onClick={() => setShowZones(v => !v)}
+										title={`${cameraZones.length} safety zone${cameraZones.length > 1 ? 's' : ''}`}
+										className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
+											showZones
+												? 'border-vs-orange/40 bg-vs-orange/10 text-vs-orange hover:bg-vs-orange/20'
+												: 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+										}`}
+									>
+										{showZones ? <Eye size={12} aria-hidden="true" /> : <EyeOff size={12} aria-hidden="true" />}
+										<span>Zones · {cameraZones.length}</span>
+									</button>
+								)}
 							</div>
 						</div>
 
@@ -1099,6 +1162,10 @@ const LiveMonitoring = () => {
 								)
 							) : (
 								<EmptySourceState message={t('selectSourceToStart' as any)} />
+							)}
+
+							{selectedVideo && viewMode !== 'multi_ai' && visibleZones.length > 0 && (
+								<SafetyZonesOverlay zones={visibleZones} />
 							)}
 
 							{viewMode === 'file' && selectedVideo && !isPlaying && (
@@ -1281,6 +1348,10 @@ const LiveMonitoring = () => {
 								)}
 							</div>
 						) : null}
+
+						{selectedVideo && viewMode !== 'multi_ai' && visibleZones.length > 0 && (
+							<SafetyZonesOverlay zones={visibleZones} />
+						)}
 
 						{viewMode === 'file' && !isPlaying && (
 							<div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/55 p-6 text-center text-zinc-400">

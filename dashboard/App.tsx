@@ -14,13 +14,22 @@ import {
   Cpu,
   UserCheck,
   X,
-  Settings
+  Settings,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { NotificationRecord, Page, UserRole } from './types';
 import VisionSafeLogo from './components/VisionSafeLogo';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthAPI, NotificationsAPI, setAuthToken } from './api';
 import { a11yClasses } from './utils/accessibility';
+import {
+  getNotificationSoundEnabled,
+  playDangerNotificationSound,
+  playNotificationSound,
+  setNotificationSoundEnabled,
+  unlockNotificationSound,
+} from './utils/notificationSound';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const LiveMonitoring = lazy(() => import('./components/LiveMonitoring'));
@@ -77,6 +86,24 @@ const toNotificationItem = (record: NotificationRecord): NotificationItem => ({
   type: record.type === 'alert' || record.type === 'system' ? record.type : 'info',
 });
 
+const shouldPlayNotificationSound = (payload: any): boolean => {
+  if (!payload || payload.type === 'keepalive') return false;
+  if (payload.type === 'incident_created') return true;
+  if (payload.type !== 'notification') return false;
+  const notificationType = String(payload.notification_type ?? '').toLowerCase();
+  return notificationType === 'alert';
+};
+
+const isDangerNotification = (payload: any): boolean => {
+  const severity = String(
+    payload?.severity ??
+    payload?.incident?.severity ??
+    payload?.incident?.riskLevel ??
+    ''
+  ).toLowerCase();
+  return severity === 'critical' || severity === 'high';
+};
+
 const PageFallback = () => (
   <div className="h-full w-full flex items-center justify-center bg-[#050505] text-zinc-300">
     <div
@@ -95,6 +122,7 @@ const AppContent = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isSoundEnabled, setIsSoundEnabled] = useState(() => getNotificationSoundEnabled());
   const { language, setLanguage, dir, t } = useLanguage();
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -127,6 +155,25 @@ const AppContent = () => {
     });
   };
 
+  const toggleNotificationSound = () => {
+    const next = !isSoundEnabled;
+    setIsSoundEnabled(next);
+    setNotificationSoundEnabled(next);
+    if (next) {
+      unlockNotificationSound();
+    }
+  };
+
+  useEffect(() => {
+    const unlock = () => unlockNotificationSound();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated) return;
     void refreshNotifications();
@@ -155,6 +202,13 @@ const AppContent = () => {
           const payload = JSON.parse(event.data);
           if (payload.type === 'keepalive') return;
           if (payload.type === 'incident_created' || payload.type === 'notification') {
+            if (shouldPlayNotificationSound(payload)) {
+              if (isDangerNotification(payload)) {
+                playDangerNotificationSound();
+              } else {
+                playNotificationSound();
+              }
+            }
             void refreshNotifications();
           }
         } catch {}
@@ -389,6 +443,16 @@ const AppContent = () => {
             >
               <Globe size={16} aria-hidden="true" />
               <span className="text-xs font-bold uppercase">{language === 'en' ? 'AR' : 'EN'}</span>
+            </button>
+
+            <button
+              onClick={toggleNotificationSound}
+              aria-label={isSoundEnabled ? 'Mute notification sound' : 'Enable notification sound'}
+              aria-pressed={isSoundEnabled}
+              title={isSoundEnabled ? 'Mute notification sound' : 'Enable notification sound'}
+              className={`p-2 text-zinc-400 hover:text-vs-orange transition-colors border border-zinc-800 rounded bg-zinc-900 ${a11yClasses.focusRing}`}
+            >
+              {isSoundEnabled ? <Volume2 size={18} aria-hidden="true" /> : <VolumeX size={18} aria-hidden="true" />}
             </button>
 
             {/* Notifications */}

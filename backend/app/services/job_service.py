@@ -27,6 +27,17 @@ from .queue_service import (
 from .worker_tasks import run_edge_worker_job, _find_repo_root
 
 STOP_FORCE_CLEAR_SECONDS = float(os.getenv("JOB_STOP_FORCE_CLEAR_SECONDS", "15"))
+SUPPORTED_AI_CAPABILITIES = {"ppe", "fall", "proximity", "ergonomics"}
+LEGACY_PROFILE_CAPABILITIES = {
+    "production_line": ["fall", "ppe", "proximity", "ergonomics"],
+    "forklift_zone": ["ppe", "proximity"],
+    "loading_dock": ["fall", "ppe", "proximity"],
+    "hot_work": ["ppe", "ergonomics"],
+    "full_suite": ["fall", "ppe", "proximity", "ergonomics"],
+    "ppe_only": ["ppe"],
+    "fall_only": ["fall"],
+    "proximity_only": ["proximity"],
+}
 
 
 def _is_live_source(source: str) -> bool:
@@ -156,12 +167,31 @@ class JobService:
 
             resolved_source = self._resolve_source(source_name, camera_id, db)
             camera_name = camera_id
+            edge_profile = "full_suite"
+            edge_capabilities: list[str] = []
+            edge_alert_cooldown_sec: float | None = None
             if db is not None:
                 from ..models import Camera as CameraModel
 
                 camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
                 if camera and camera.name:
                     camera_name = camera.name
+                if camera and camera.severity_profile:
+                    edge_profile = str(camera.severity_profile)
+                if camera and camera.ai_alert_cooldown_sec is not None:
+                    edge_alert_cooldown_sec = max(0.0, float(camera.ai_alert_cooldown_sec))
+                if camera and isinstance(camera.supported_ai_capabilities, list):
+                    edge_capabilities = [
+                        str(item).strip().lower()
+                        for item in camera.supported_ai_capabilities
+                        if str(item).strip()
+                    ]
+                if not edge_capabilities:
+                    edge_capabilities = LEGACY_PROFILE_CAPABILITIES.get(edge_profile, [])
+                edge_capabilities = [
+                    item for item in dict.fromkeys(edge_capabilities)
+                    if item in SUPPORTED_AI_CAPABILITIES
+                ]
 
             selected_worker = select_worker()
             assigned_worker_id = selected_worker.get("worker_id") if selected_worker else None
@@ -207,6 +237,9 @@ class JobService:
                     "is_live_source": _is_live_source(resolved_source),
                     "assigned_worker_id": assigned_worker_id,
                     "assigned_worker_gpu_id": assigned_worker_gpu_id,
+                    "edge_profile": edge_profile,
+                    "edge_capabilities": edge_capabilities,
+                    "edge_alert_cooldown_sec": edge_alert_cooldown_sec,
                 },
                 retry=Retry(max=retry_max, interval=retry_schedule),
                 job_timeout=-1,

@@ -90,8 +90,9 @@ class PostureAnalyzer:
     Ergonomic Risk Assessment project's lookup tables.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cooldown_sec: Optional[float] = None) -> None:
         self._states: Dict[int, PersonPostureState] = {}
+        self._cooldown_sec = max(0.0, float(cooldown_sec)) if cooldown_sec is not None else POSTURE_COOLDOWN_SEC
         self.last_samples: List[HazardEvent] = []
         logger.info("PostureAnalyzer initialized (full RULA/REBA)")
 
@@ -297,7 +298,7 @@ class PostureAnalyzer:
             # ── Event emission ──────────────────────────────────────
             # Immediate critical (RULA 7, or REBA's very-high-risk band).
             if rula_score >= 7 or reba_score >= 11:
-                if timestamp - st.last_event_time >= POSTURE_COOLDOWN_SEC:
+                if timestamp - st.last_event_time >= self._cooldown_sec:
                     st.last_event_time = timestamp
                     st.bad_posture_start = None
                     st.good_posture_start = None
@@ -330,7 +331,7 @@ class PostureAnalyzer:
                 sustained = timestamp - st.bad_posture_start
 
                 if sustained >= POSTURE_SUSTAINED_THRESHOLD:
-                    if timestamp - st.last_event_time >= POSTURE_COOLDOWN_SEC:
+                    if timestamp - st.last_event_time >= self._cooldown_sec:
                         st.last_event_time = timestamp
                         events.append(HazardEvent(
                             event_type="poor_posture",

@@ -72,12 +72,19 @@ class SafetyZoneEngine:
         seen_keys: set[tuple[str, str, str]] = set()
         occupancy: dict[str, int] = {zone.id: 0 for zone in zones}
 
-        for det in [d for d in detections if d.class_name in {"person", "forklift"}]:
+        zone_detections = [d for d in detections if d.class_name in {"person", "forklift"}]
+        forklifts = [d for d in zone_detections if d.class_name == "forklift"]
+
+        for det in zone_detections:
             stable_key = self._stable_key(camera_id, det)
             anchor = self._anchor(det)
             for zone in zones:
                 polygon = self._scaled_polygon(zone, frame_width=frame_width, frame_height=frame_height)
                 zone_key = (str(camera_id), zone.id, stable_key)
+                if _is_forklift_zone_driver_exempt(zone, det, forklifts, polygon):
+                    self._state.pop(zone_key, None)
+                    continue
+
                 seen_keys.add(zone_key)
                 state = self._state.setdefault(zone_key, _ObjectZoneState())
                 inside = _contains(anchor, polygon)
@@ -121,6 +128,26 @@ class SafetyZoneEngine:
         self._expire_stale_state(timestamp, seen_keys)
         return self._apply_event_cooldowns(events, timestamp)
 
+    def ppe_zones_for_person(
+        self,
+        person: Detection,
+        *,
+        camera_id: str,
+        frame_shape: tuple[int, ...] | None = None,
+    ) -> list[SafetyZone]:
+        """Return enabled PPE zones containing a tracked person anchor."""
+        frame_height = int(frame_shape[0]) if frame_shape else None
+        frame_width = int(frame_shape[1]) if frame_shape and len(frame_shape) > 1 else None
+        anchor = self._anchor(person)
+        zones: list[SafetyZone] = []
+        for zone in self._zones_by_camera.get(str(camera_id), []):
+            if zone.zone_type not in {"ppe", "ppe_required"}:
+                continue
+            polygon = self._scaled_polygon(zone, frame_width=frame_width, frame_height=frame_height)
+            if _contains(anchor, polygon):
+                zones.append(zone)
+        return zones
+
     def _events_for_zone(
         self,
         zone: SafetyZone,
@@ -144,6 +171,7 @@ class SafetyZoneEngine:
                 "safety_zone_id": zone.id,
                 "safety_zone_name": zone.name,
                 "safety_zone_type": zone.zone_type,
+                "safety_zone_snapshot": _zone_snapshot(zone),
                 "zone": zone.name,
                 "zone_event_type": zone_event_type,
                 "object_class": det.class_name,
@@ -174,7 +202,9 @@ class SafetyZoneEngine:
             meta = event.metadata or {}
             key = (event.camera_id, str(meta.get("safety_zone_id")), str(meta.get("stable_object_key")))
             state = self._state.setdefault(key, _ObjectZoneState(last_seen=timestamp))
-            cooldown = _float_rule(meta.get("zone_rules") or {}, "cooldown_sec") or 30.0
+            cooldown = _float_rule(meta.get("zone_rules") or {}, "cooldown_sec")
+            if cooldown is None:
+                cooldown = 30.0
             if timestamp - state.last_emit_at.get(event.event_type, 0.0) < cooldown:
                 continue
             state.last_emit_at[event.event_type] = timestamp
@@ -183,39 +213,51 @@ class SafetyZoneEngine:
 
     @staticmethod
     def _rule_event_types(zone: SafetyZone, object_class: str, zone_event_type: str) -> list[str]:
-        if zone_event_type == "exit":
-            return ["zone_exit"]
-        if zone_event_type == "cross":
-            return ["zone_crossed"]
+        if zone.zone_type in {"ppe", "ppe_required"}:
+            return []
+        if zone_event_type in {"exit", "cross"}:
+            return []
         if zone_event_type == "occupancy_threshold_exceeded":
             return ["zone_occupancy_threshold_exceeded"]
         if zone_event_type == "dwell_time_exceeded":
             return ["zone_dwell_time_exceeded"]
+        if zone_event_type != "enter":
+            return []
         denied = set(zone.rules.get("denied_classes") or [])
-        allowed = set(zone.rules.get("allowed_classes") or ["person", "forklift"])
+        raw_allowed = zone.rules.get("allowed_classes")
+        allowed = set(raw_allowed if raw_allowed is not None else ["person", "forklift"])
         if zone.zone_type in {"danger", "no_entry"} and object_class == "person":
-            return ["zone_person_entered"]
+            return ["zone_person_in_danger"]
+        if zone.zone_type in {"danger", "no_entry"} and object_class == "forklift":
+            return ["zone_unauthorized_presence"]
+        if zone.zone_type == "forklift_only" and object_class == "person":
+            return ["zone_person_in_forklift_lane"]
         if zone.zone_type == "pedestrian_only" and object_class == "forklift":
-            return ["zone_forklift_entered_pedestrian_zone"]
+            return ["zone_forklift_in_pedestrian_zone"]
         if zone.zone_type in {"restricted", "forklift_only"} and object_class not in allowed:
-            return ["zone_unauthorized_entry"]
+            return ["zone_unauthorized_presence"]
         if object_class in denied:
-            return ["zone_unauthorized_entry"]
-        return ["zone_enter"]
+            return ["zone_unauthorized_presence"]
+        return []
 
     @staticmethod
     def _description(zone: SafetyZone, object_class: str, zone_event_type: str, event_type: str) -> str:
-        if event_type == "zone_person_entered":
-            return f"Person entered danger zone: {zone.name}"
-        if event_type == "zone_forklift_entered_pedestrian_zone":
-            return f"Forklift entered pedestrian zone: {zone.name}"
-        if event_type == "zone_unauthorized_entry":
-            return f"Unauthorized {object_class} entry into {zone.name}"
+        del zone_event_type
+        if event_type == "zone_person_in_danger":
+            return f"Worker in danger zone: {zone.name}"
+        if event_type == "zone_person_in_forklift_lane":
+            return f"Worker in forklift lane: {zone.name}"
+        if event_type == "zone_forklift_in_pedestrian_zone":
+            return f"Forklift in pedestrian walkway: {zone.name}"
+        if event_type == "zone_unauthorized_presence":
+            label = "Worker" if object_class == "person" else object_class.title()
+            return f"{label} in restricted zone: {zone.name}"
         if event_type == "zone_occupancy_threshold_exceeded":
             return f"Zone occupancy threshold exceeded: {zone.name}"
         if event_type == "zone_dwell_time_exceeded":
             return f"Time inside zone exceeded limit: {zone.name}"
-        return f"{object_class.title()} {zone_event_type.replace('_', ' ')} zone: {zone.name}"
+        label = "Worker" if object_class == "person" else object_class.title()
+        return f"{label} safety zone alert: {zone.name}"
 
     @staticmethod
     def _parse_zone(raw: dict[str, Any]) -> SafetyZone | None:
@@ -278,6 +320,48 @@ def _severity(raw: Any) -> Severity:
         "medium": Severity.MEDIUM,
         "low": Severity.LOW,
     }.get(str(raw or "High").lower(), Severity.HIGH)
+
+
+def _zone_snapshot(zone: SafetyZone) -> dict[str, Any]:
+    return {
+        "id": zone.id,
+        "name": zone.name,
+        "zone_type": zone.zone_type,
+        "polygon": [{"x": x, "y": y} for x, y in zone.polygon],
+        "coordinate_space": "source_pixels",
+        "source_width": zone.source_width,
+        "source_height": zone.source_height,
+        "color": zone.color,
+        "enabled": True,
+        "priority": zone.priority,
+        "rules": dict(zone.rules or {}),
+    }
+
+
+def _is_forklift_zone_driver_exempt(
+    zone: SafetyZone,
+    det: Detection,
+    forklifts: list[Detection],
+    zone_polygon: Polygon,
+) -> bool:
+    if zone.zone_type != "forklift_only" or det.class_name != "person" or not forklifts:
+        return False
+    person_center = _bbox_center(det.bbox)
+    return any(
+        _point_inside_bbox(person_center, forklift.bbox)
+        and _contains(_bbox_center(forklift.bbox), zone_polygon)
+        for forklift in forklifts
+    )
+
+
+def _bbox_center(bbox: tuple[int, int, int, int]) -> Point:
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def _point_inside_bbox(point: Point, bbox: tuple[int, int, int, int]) -> bool:
+    x, y = point
+    return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
 
 
 def _float_rule(rules: dict[str, Any], key: str) -> float | None:

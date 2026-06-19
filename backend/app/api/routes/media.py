@@ -17,8 +17,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ...utils.media import (
     VIDEOS_DIR as _VIDEOS_DIR,
+    generate_thumbnail,
     sanitize_video_filename as _sanitize_video_filename,
     stream_upload_to_videos_dir,
+    thumbnail_path_for,
 )
 from ...utils.permissions import require_roles
 
@@ -105,6 +107,7 @@ def _build_video_entry(path: Path) -> dict[str, str]:
         "description": f"Video source ({path.name}) ready for AI analysis and playback.",
         "stream_url": f"/api/media/videos/{path.name}",
         "stream_feed_url": f"/api/media/video_feed/{path.name}",
+        "thumbnail_url": f"/api/media/thumbnails/{path.name}",
     }
 
 
@@ -219,6 +222,25 @@ def rename_video(video_name: str, payload: dict[str, str] = Body(...)) -> dict[s
     if dest != video_path:
         video_path.rename(dest)
     return _build_video_entry(dest)
+
+
+@router.get("/thumbnails/{video_name}")
+def get_video_thumbnail(video_name: str):
+    """Return the cached first-frame JPEG, generating it on demand."""
+    safe = (_VIDEOS_DIR / video_name).resolve()
+    if not safe.exists() or safe.parent != _VIDEOS_DIR.resolve():
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    thumb = thumbnail_path_for(video_name)
+    if not thumb.exists():
+        if generate_thumbnail(video_name) is None:
+            raise HTTPException(status_code=404, detail="Unable to generate thumbnail")
+
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/video_feed/{video_name}")

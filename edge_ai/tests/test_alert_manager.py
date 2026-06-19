@@ -73,6 +73,23 @@ def _event(severity: Severity) -> HazardEvent:
 	)
 
 
+def _zone_event() -> HazardEvent:
+	return HazardEvent(
+		event_type="zone_person_in_danger",
+		severity=Severity.CRITICAL,
+		camera_id="cam_01",
+		timestamp=100.0,
+		frame_number=1,
+		track_id=1,
+		description="Worker in danger zone",
+		metadata={
+			"safety_zone": True,
+			"safety_zone_id": "CSZ-1",
+			"stable_object_key": "person:1",
+		},
+	)
+
+
 def _suppressed_fall_lifecycle_event() -> HazardEvent:
 	return HazardEvent(
 		event_type="fall_candidate",
@@ -396,3 +413,19 @@ def test_full_priority_queue_does_not_evict_same_severity_fifo() -> None:
 	assert manager._enqueue_delivery_task(DeliveryChannel.BACKEND, first) == (True, None)
 	assert manager._enqueue_delivery_task(DeliveryChannel.BACKEND, second) == (False, None)
 	assert manager._queue.get_nowait().task.event is first
+
+
+def test_clip_failure_still_routes_zone_event_to_backend() -> None:
+	backend = _BackendStub(ok=True)
+	manager = AlertManager(
+		backend_client=backend,
+		fcm_service=None,
+		siren_controller=_SirenStub(ok=True),
+		config=AlertManagerConfig(async_delivery_enabled=False),
+	)
+
+	event = _zone_event()
+	manager._route_clip_fallback(event, reason="no_frames")
+
+	assert backend.calls == 1
+	assert event.metadata["video_clip_fallback_reason"] == "no_frames"

@@ -128,7 +128,8 @@ def _build_pipeline_context(
     stream = StreamHandler(source=source, camera_id=cam_id)
     engine = InferenceEngine()
     metrics = MetricsLogger()
-    event_aggregator = EventAggregator()
+    alert_cooldown_sec = profile.alert_policy.cooldown_sec
+    event_aggregator = EventAggregator(hazard_cooldown_sec=alert_cooldown_sec)
     calibration_mgr = CalibrationManager()
     track_monitor = TrackQualityMonitor()
     det_smoother = DetectionSmoother(grace_frames=TRACK_ID_GRACE_FRAMES)
@@ -165,10 +166,11 @@ def _build_pipeline_context(
     hazard_analyzer = None
     if profile.is_enabled("hazard_analyzer"):
         hazard_analyzer = HazardAnalyzer(
-            fall_enabled=profile.is_sub_enabled("hazard_analyzer", "fall")
+            fall_enabled=profile.is_sub_enabled("hazard_analyzer", "fall"),
+            cooldown_sec=alert_cooldown_sec,
         )
 
-    posture_analyzer = PostureAnalyzer() if profile.is_enabled("posture_analyzer") else None
+    posture_analyzer = PostureAnalyzer(cooldown_sec=alert_cooldown_sec) if profile.is_enabled("posture_analyzer") else None
     proximity_analyzer = ProximityAnalyzer(calibration_mgr=calibration_mgr) if proximity_enabled else None
     ppe_analyzer = PPEAnalyzer() if ppe_enabled else None
 
