@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 
 from ...config.database import get_db
 from ...config.settings import settings
+from ...api.websocket.ws_notifications import notification_ws_manager
 from ...models import User
 from ...schemas import AlertCreate, AlertEventOut, AlertOut, AlertUpdate, PaginatedResponse
 from ...services.alert_service import AlertService
+from ...services.notification_dispatch_service import NotificationDispatchService
 from ...utils.permissions import require_roles
 
 router = APIRouter(
@@ -89,7 +91,7 @@ def create_alert(payload: AlertCreate, db: Session = Depends(get_db)):
 
 
 @router.patch("/{alert_id}", response_model=AlertOut)
-def update_alert(
+async def update_alert(
     alert_id: str,
     payload: AlertUpdate,
     db: Session = Depends(get_db),
@@ -98,6 +100,26 @@ def update_alert(
     updated = AlertService.update(db, alert_id, payload, actor=current_user)
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found")
+
+    notification = NotificationDispatchService.record_alert_notification(
+        db,
+        alert=updated,
+        action="alert_updated",
+        message=f"{updated.id}: {updated.type} alert details updated by {current_user.name}",
+    )
+    db.commit()
+    db.refresh(notification)
+
+    await notification_ws_manager.broadcast({
+        "type": "notification",
+        "id": notification.id,
+        "title": notification.title,
+        "message": notification.message,
+        "notification_type": notification.type,
+        "severity": updated.severity.value if hasattr(updated.severity, "value") else str(updated.severity),
+        "source": notification.source,
+        "created_at": notification.created_at.isoformat() if notification.created_at else None,
+    })
     return updated
 
 

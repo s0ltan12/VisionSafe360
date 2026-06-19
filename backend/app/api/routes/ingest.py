@@ -42,6 +42,7 @@ async def ingest_incident(payload: HazardEventPayload, db: Session = Depends(get
             "title": "Incident created",
             "message": f"{incident.id}: {incident.classification} ({severity})",
             "notification_type": "alert",
+            "severity": severity,
             "source": "incident_command",
             "created_at": ts,
         })

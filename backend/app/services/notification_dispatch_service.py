@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from ..models import Incident, Notification
+from ..models import Alert, Incident, Notification
 
 
 class NotificationDispatchService:
@@ -22,6 +22,29 @@ class NotificationDispatchService:
         "incident_archived": "Incident archived",
         "sla_breached": "SLA breached",
     }
+
+    @staticmethod
+    def record_alert_notification(
+        db: Session,
+        *,
+        alert: Alert,
+        action: str,
+        message: str | None = None,
+    ) -> Notification:
+        title = "Alert updated" if action == "alert_updated" else "Alert notification"
+        severity = alert.severity.value if hasattr(alert.severity, "value") else str(alert.severity)
+        row = Notification(
+            id=f"NOTIF-{uuid.uuid4().hex[:12]}",
+            user_id=None,
+            title=title,
+            message=message or f"{alert.id}: {alert.type} alert updated ({severity})",
+            type="alert",
+            source="alert_service",
+            is_read=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        return row
 
     @staticmethod
     def record_incident_notification(
