@@ -72,12 +72,19 @@ class SafetyZoneEngine:
         seen_keys: set[tuple[str, str, str]] = set()
         occupancy: dict[str, int] = {zone.id: 0 for zone in zones}
 
-        for det in [d for d in detections if d.class_name in {"person", "forklift"}]:
+        zone_detections = [d for d in detections if d.class_name in {"person", "forklift"}]
+        forklifts = [d for d in zone_detections if d.class_name == "forklift"]
+
+        for det in zone_detections:
             stable_key = self._stable_key(camera_id, det)
             anchor = self._anchor(det)
             for zone in zones:
                 polygon = self._scaled_polygon(zone, frame_width=frame_width, frame_height=frame_height)
                 zone_key = (str(camera_id), zone.id, stable_key)
+                if _is_forklift_zone_driver_exempt(zone, det, forklifts, polygon):
+                    self._state.pop(zone_key, None)
+                    continue
+
                 seen_keys.add(zone_key)
                 state = self._state.setdefault(zone_key, _ObjectZoneState())
                 inside = _contains(anchor, polygon)
@@ -278,6 +285,32 @@ def _severity(raw: Any) -> Severity:
         "medium": Severity.MEDIUM,
         "low": Severity.LOW,
     }.get(str(raw or "High").lower(), Severity.HIGH)
+
+
+def _is_forklift_zone_driver_exempt(
+    zone: SafetyZone,
+    det: Detection,
+    forklifts: list[Detection],
+    zone_polygon: Polygon,
+) -> bool:
+    if zone.zone_type != "forklift_only" or det.class_name != "person" or not forklifts:
+        return False
+    person_center = _bbox_center(det.bbox)
+    return any(
+        _point_inside_bbox(person_center, forklift.bbox)
+        and _contains(_bbox_center(forklift.bbox), zone_polygon)
+        for forklift in forklifts
+    )
+
+
+def _bbox_center(bbox: tuple[int, int, int, int]) -> Point:
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def _point_inside_bbox(point: Point, bbox: tuple[int, int, int, int]) -> bool:
+    x, y = point
+    return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
 
 
 def _float_rule(rules: dict[str, Any], key: str) -> float | None:

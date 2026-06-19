@@ -87,3 +87,120 @@ def test_dwell_limit_emits_once_while_inside():
 
     assert any(event.event_type == "zone_dwell_time_exceeded" for event in events)
     assert not any(event.event_type == "zone_dwell_time_exceeded" for event in repeated)
+
+
+def _forklift_zone_engine() -> SafetyZoneEngine:
+    engine = SafetyZoneEngine()
+    engine.set_camera_zones("CAM-01", [{
+        "id": "CSZ-FORKLIFT",
+        "name": "Forklift Lane",
+        "zone_type": "forklift_only",
+        "polygon": [{"x": 0, "y": 0}, {"x": 400, "y": 0}, {"x": 400, "y": 400}, {"x": 0, "y": 400}],
+        "source_width": 640,
+        "source_height": 480,
+        "rules": {
+            "allowed_classes": ["forklift"],
+            "denied_classes": ["person"],
+            "severity": "High",
+            "cooldown_sec": 0,
+        },
+    }])
+    return engine
+
+
+def test_forklift_zone_ignores_driver_center_inside_forklift_box():
+    engine = _forklift_zone_engine()
+
+    events = engine.analyze(
+        [
+            _det("forklift", (100, 100, 300, 250), track_id=10),
+            _det("person", (160, 115, 230, 245), track_id=1),
+        ],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    assert not any(event.event_type == "zone_unauthorized_entry" for event in events)
+
+
+def test_forklift_zone_alerts_for_worker_but_not_driver():
+    engine = _forklift_zone_engine()
+
+    events = engine.analyze(
+        [
+            _det("forklift", (100, 100, 300, 250), track_id=10),
+            _det("person", (160, 115, 230, 245), track_id=1),
+            _det("person", (320, 120, 370, 260), track_id=2),
+        ],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    violations = [event for event in events if event.event_type == "zone_unauthorized_entry"]
+    assert len(violations) == 1
+    assert violations[0].track_id == 2
+
+
+def test_forklift_zone_alerts_for_worker_alone():
+    engine = _forklift_zone_engine()
+
+    events = engine.analyze(
+        [_det("person", (160, 115, 230, 245), track_id=1)],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert events[0].track_id == 1
+
+
+def test_forklift_zone_alerts_when_driver_exits_forklift_box():
+    engine = _forklift_zone_engine()
+
+    engine.analyze(
+        [
+            _det("forklift", (100, 100, 300, 250), track_id=10),
+            _det("person", (160, 115, 230, 245), track_id=1),
+        ],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+    events = engine.analyze(
+        [
+            _det("forklift", (100, 100, 300, 250), track_id=10),
+            _det("person", (305, 115, 365, 245), track_id=1),
+        ],
+        camera_id="CAM-01",
+        frame_number=2,
+        timestamp=101.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert events[0].track_id == 1
+
+
+def test_forklift_zone_requires_containing_forklift_to_be_inside_same_zone():
+    engine = _forklift_zone_engine()
+
+    events = engine.analyze(
+        [
+            _det("forklift", (350, 100, 550, 250), track_id=10),
+            _det("person", (360, 115, 390, 245), track_id=1),
+        ],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert events[0].track_id == 1
