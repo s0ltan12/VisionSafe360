@@ -19,6 +19,7 @@ from ..config.settings import (
     SAFETY_ZONES_REFRESH_INTERVAL_SEC,
 )
 from ..analysis.composite_hazard_engine import CompositeHazardEngine
+from ..analysis.ppe_zone_rule_evaluator import PPEZoneRuleEvaluator
 from ..analysis.safety_zone_engine import SafetyZoneEngine
 from ..analysis.zone_config_loader import ZoneConfigLoader
 from .context import PipelineContext, FrameResult
@@ -34,7 +35,9 @@ class FrameProcessor:
         self._composite_hazard_engine = CompositeHazardEngine()
         self._zone_config_loader = ZoneConfigLoader()
         self._safety_zone_engine = SafetyZoneEngine()
+        self._ppe_zone_rule_evaluator = PPEZoneRuleEvaluator(self._safety_zone_engine)
         self._last_safety_zone_refresh: dict[str, float] = {}
+        self._render_zones_by_camera: dict[str, list[dict[str, Any]]] = {}
 
     def process(self, bundle) -> FrameResult:
         ctx = self._ctx
@@ -115,24 +118,32 @@ class FrameProcessor:
 
         if SAFETY_ZONES_ENABLED:
             self._refresh_safety_zones(ctx.stream.camera_id, ts_now)
-            hazard_events.extend(
-                self._safety_zone_engine.analyze(
-                    detections,
-                    camera_id=ctx.stream.camera_id,
-                    frame_number=bundle.frame_number,
-                    timestamp=ts_now,
-                    frame_shape=getattr(bundle.frame, "shape", None),
-                )
-            )
-
-        if ctx.hazard_analyzer is not None:
-            hazard_events = ctx.hazard_analyzer.analyze(
+            zone_events = self._safety_zone_engine.analyze(
                 detections,
                 camera_id=ctx.stream.camera_id,
                 frame_number=bundle.frame_number,
                 timestamp=ts_now,
-                fall_this_frame=(ctx.frame_counter % ctx.fall_every_n == 0),
-                pose_results=pose_results,
+                frame_shape=getattr(bundle.frame, "shape", None),
+            )
+            if zone_events:
+                logger.warning(
+                    "SAFETY_ZONE_EVENT camera_id=%s frame=%s events=%s",
+                    ctx.stream.camera_id,
+                    bundle.frame_number,
+                    [event.event_type for event in zone_events],
+                )
+            hazard_events.extend(zone_events)
+
+        if ctx.hazard_analyzer is not None:
+            hazard_events.extend(
+                ctx.hazard_analyzer.analyze(
+                    detections,
+                    camera_id=ctx.stream.camera_id,
+                    frame_number=bundle.frame_number,
+                    timestamp=ts_now,
+                    fall_this_frame=(ctx.frame_counter % ctx.fall_every_n == 0),
+                    pose_results=pose_results,
+                )
             )
 
         if ctx.proximity_analyzer is not None and prox_detections:
@@ -166,15 +177,17 @@ class FrameProcessor:
 
         if ctx.ppe_analyzer is not None and ppe_detections:
             tracked_people = [d for d in detections if d.class_name == "person"]
-            hazard_events.extend(
-                ctx.ppe_analyzer.analyze(
-                    ppe_detections=ppe_detections,
-                    tracked_people=tracked_people,
-                    camera_id=ctx.stream.camera_id,
-                    frame_number=bundle.frame_number,
-                    timestamp=ts_now,
+            if SAFETY_ZONES_ENABLED:
+                hazard_events.extend(
+                    self._ppe_zone_rule_evaluator.evaluate(
+                        ppe_detections=ppe_detections,
+                        tracked_people=tracked_people,
+                        camera_id=ctx.stream.camera_id,
+                        frame_number=bundle.frame_number,
+                        timestamp=ts_now,
+                        frame_shape=getattr(bundle.frame, "shape", None),
+                    )
                 )
-            )
 
         if (
             ctx.posture_analyzer is not None
@@ -232,6 +245,7 @@ class FrameProcessor:
             "offline_queue_size": ctx.backend_client.offline_queue_size(),
         }
 
+        render_zones = self._render_zones_by_camera.get(ctx.stream.camera_id, [])
         annotated = bundle.frame.copy()
         ctx.renderer.render(
             annotated,
@@ -250,7 +264,17 @@ class FrameProcessor:
             track_coverage=track_metrics.get("track_coverage", 0.0),
             ppe_capable=ctx.ppe_capable,
             now=ts_now,
+            zones=render_zones,
         )
+        if render_zones and getattr(getattr(ctx, "renderer", None), "cfg", None) is not None:
+            zones_enabled = bool(getattr(ctx.renderer.cfg, "enable_zones", False))
+        else:
+            zones_enabled = bool(render_zones)
+        if zones_enabled:
+            for event in emitted_events:
+                metadata = getattr(event, "metadata", None)
+                if isinstance(metadata, dict) and metadata.get("safety_zone_snapshot"):
+                    metadata["evidence_has_safety_zone_overlay"] = True
 
         if ctx.frame_ring_buffer is not None:
             ctx.frame_ring_buffer.push(annotated, timestamp=ts_now)
@@ -371,6 +395,12 @@ class FrameProcessor:
         payload = self._ctx.backend_client.fetch_safety_zones(camera_id)
         zones = payload.get("zones") if isinstance(payload, dict) else []
         self._safety_zone_engine.set_camera_zones(camera_id, zones or [])
+        self._render_zones_by_camera[camera_id] = _render_zones(zones or [])
+        logger.info(
+            "safety zones refreshed camera_id=%s zone_count=%d",
+            camera_id,
+            len(zones or []),
+        )
 
 
 def _safety_overlay_events(emitted_events: list[Any], raw_events: list[Any]) -> list[Any]:
@@ -392,6 +422,36 @@ def _safety_overlay_events(emitted_events: list[Any], raw_events: list[Any]) -> 
         merged.append(event)
         existing.add(key)
     return merged
+
+
+def _render_zones(raw_zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert backend safety-zone payloads into renderer polygon payloads."""
+    zones: list[dict[str, Any]] = []
+    for raw in raw_zones:
+        if not isinstance(raw, dict) or not raw.get("enabled", True):
+            continue
+        polygon = raw.get("polygon") or raw.get("points") or []
+        points: list[tuple[int, int]] = []
+        for point in polygon:
+            try:
+                if isinstance(point, dict):
+                    x = point["x"]
+                    y = point["y"]
+                else:
+                    x, y = point[:2]
+                points.append((int(round(float(x))), int(round(float(y)))))
+            except (TypeError, ValueError, KeyError, IndexError):
+                points = []
+                break
+        if len(points) < 3:
+            continue
+        zones.append({
+            "id": raw.get("id"),
+            "name": raw.get("name") or raw.get("id") or "Safety Zone",
+            "type": raw.get("zone_type") or raw.get("type") or "custom",
+            "points": points,
+        })
+    return zones
 
 
 def _is_live_forklift_overlay_event(event: Any) -> bool:

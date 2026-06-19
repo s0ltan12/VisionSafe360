@@ -42,6 +42,11 @@ class ModuleConfig:
 
 
 @dataclass
+class AlertPolicyConfig:
+    cooldown_sec: Optional[float] = None
+
+
+@dataclass
 class ProfileConfig:
     """Parsed profile — drives the module registry."""
     profile_name: str = "default"
@@ -49,6 +54,7 @@ class ProfileConfig:
     modules: Dict[str, ModuleConfig] = field(default_factory=dict)
     # Raw ``ui:`` section from the profile YAML — consumed by UISettings
     ui_config: dict = field(default_factory=dict)
+    alert_policy: AlertPolicyConfig = field(default_factory=AlertPolicyConfig)
     # Source for person tracking: "pose" (default) or "ppe"
     person_tracker_source: str = "pose"
 
@@ -114,6 +120,15 @@ def _parse_module(raw: dict) -> ModuleConfig:
     )
 
 
+def _parse_alert_policy(raw: dict) -> AlertPolicyConfig:
+    value = raw.get("cooldown_sec") if isinstance(raw, dict) else None
+    try:
+        cooldown_sec = None if value is None else max(0.0, float(value))
+    except (TypeError, ValueError):
+        cooldown_sec = None
+    return AlertPolicyConfig(cooldown_sec=cooldown_sec)
+
+
 def load_profile(name_or_path: Optional[str] = None) -> ProfileConfig:
     """Load a profile by name (looked up in profiles/) or by absolute path.
 
@@ -149,6 +164,7 @@ def load_profile(name_or_path: Optional[str] = None) -> ProfileConfig:
             profile.modules[mod_name] = _parse_module(mod_cfg)
 
     profile.ui_config = data.get("ui", {})
+    profile.alert_policy = _parse_alert_policy(data.get("alert_policy", {}))
     profile.person_tracker_source = str(
         data.get("person_tracker_source", "pose")
     ).strip().lower()

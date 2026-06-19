@@ -36,7 +36,7 @@ modules:
 ui:
   enable_detections:    true
   enable_pose:          true
-  enable_zones:         false
+  enable_zones:         true
   enable_hazards:       false
   enable_worker_panels: true
   enable_hud:           true

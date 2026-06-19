@@ -374,6 +374,44 @@ class TestCooldownKeys:
         assert agg.process([_event(event_type=event_type, timestamp=t0 + 56.0)], t0 + 56.0) == []
         assert len(agg.process([_event(event_type=event_type, timestamp=t0 + 57.0)], t0 + 57.0)) == 1
 
+    def test_profile_cooldown_overrides_fall_and_hazard_cooldown(self):
+        agg = EventAggregator(hazard_cooldown_sec=8.0)
+        t0 = 100.0
+
+        assert len(agg.process([_event(event_type="fall_confirmed", severity=Severity.CRITICAL, timestamp=t0)], t0)) == 1
+        assert agg.process([_event(event_type="fall_confirmed", severity=Severity.CRITICAL, timestamp=t0 + 1.0)], t0 + 1.0) == []
+        assert agg.process([], t0 + 6.2) == []
+        assert agg.process([_event(event_type="fall_confirmed", severity=Severity.CRITICAL, timestamp=t0 + 7.0)], t0 + 7.0) == []
+        assert len(agg.process([_event(event_type="fall_confirmed", severity=Severity.CRITICAL, timestamp=t0 + 8.2)], t0 + 8.2)) == 1
+
+        event_type = "zone_person_denied"
+        rules = {"cooldown_sec": 8.0}
+        assert len(agg.process([_event(event_type=event_type, track_id=2, timestamp=t0, zone_rules=rules)], t0)) == 1
+        assert agg.process([_event(event_type=event_type, track_id=2, timestamp=t0 + 1.0, zone_rules=rules)], t0 + 1.0) == []
+        assert agg.process([], t0 + 6.2) == []
+        assert agg.process([_event(event_type=event_type, track_id=2, timestamp=t0 + 7.0, zone_rules=rules)], t0 + 7.0) == []
+        assert len(agg.process([_event(event_type=event_type, track_id=2, timestamp=t0 + 8.2, zone_rules=rules)], t0 + 8.2)) == 1
+
+    def test_active_ppe_reemits_after_profile_cooldown_without_disappearing(self):
+        agg = EventAggregator(hazard_cooldown_sec=30.0)
+        t0 = 100.0
+        event_type = "ppe_missing_helmet"
+
+        assert agg.process([_event(event_type=event_type, timestamp=t0)], t0) == []
+        emitted = agg.process([_event(event_type=event_type, timestamp=t0 + 3.0)], t0 + 3.0)
+        assert len(emitted) == 1
+        assert emitted[0].metadata["event_lifecycle"] == "created"
+
+        assert agg.process([_event(event_type=event_type, timestamp=t0 + 20.0)], t0 + 20.0) == []
+        repeated = agg.process([_event(event_type=event_type, timestamp=t0 + 33.1)], t0 + 33.1)
+        assert len(repeated) == 1
+        assert repeated[0].metadata["event_lifecycle"] == "repeated"
+
+        assert agg.process([_event(event_type=event_type, timestamp=t0 + 50.0)], t0 + 50.0) == []
+        repeated_again = agg.process([_event(event_type=event_type, timestamp=t0 + 63.2)], t0 + 63.2)
+        assert len(repeated_again) == 1
+        assert repeated_again[0].metadata["event_lifecycle"] == "repeated"
+
     def test_composite_clears_source_pending_and_emits_only_composite(self):
         """Accepted composite events remove source hazard state from the aggregator."""
         agg = EventAggregator()

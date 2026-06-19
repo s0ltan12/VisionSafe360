@@ -8,8 +8,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from rq import get_current_job
+import yaml
 
 from .queue_service import get_job_state, set_job_state
 
@@ -48,6 +50,9 @@ def run_edge_worker_job(
     is_live_source: bool = False,
     assigned_worker_id: str | None = None,
     assigned_worker_gpu_id: str | None = None,
+    edge_profile: str = "full_suite",
+    edge_capabilities: list[str] | None = None,
+    edge_alert_cooldown_sec: float | None = None,
 ) -> dict[str, object]:
     """Execute heavy edge processing in an async queue worker.
 
@@ -111,6 +116,7 @@ def run_edge_worker_job(
     logs_dir = repo_root / "backend" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     worker_log_path = logs_dir / "edge_worker.log"
+    profile_arg = _build_dynamic_profile(edge_capabilities or [], edge_profile, edge_alert_cooldown_sec)
 
     cmd = [
         sys.executable,
@@ -120,6 +126,8 @@ def run_edge_worker_job(
         source_arg,
         "--cam-id",
         camera_id,
+        "--profile",
+        profile_arg,
         "--headless",
     ]
 
@@ -235,3 +243,87 @@ def run_edge_worker_job(
             )
             logger.exception("queued worker crashed")
             raise
+
+
+def _build_dynamic_profile(
+    capabilities: list[str],
+    fallback_profile: str,
+    alert_cooldown_sec: float | None = None,
+) -> str:
+    selected = {str(item).strip().lower() for item in capabilities if str(item).strip()}
+    if not selected:
+        return fallback_profile or "full_suite"
+
+    unknown = selected - {"ppe", "fall", "proximity", "ergonomics"}
+    if unknown:
+        logger.warning("Ignoring unsupported camera AI capabilities: %s", sorted(unknown))
+
+    ppe_enabled = "ppe" in selected
+    fall_enabled = "fall" in selected
+    proximity_enabled = "proximity" in selected
+    ergonomics_enabled = "ergonomics" in selected
+    pose_enabled = fall_enabled or ergonomics_enabled or not ppe_enabled
+
+    profile = {
+        "profile_name": "camera_custom",
+        "description": "Camera-specific AI role generated from selected hazards",
+        "person_tracker_source": "ppe" if ppe_enabled and not pose_enabled else "pose",
+        "alert_policy": {
+            "cooldown_sec": float(alert_cooldown_sec) if alert_cooldown_sec is not None else None,
+        },
+        "modules": {
+            "pose": {
+                "enabled": pose_enabled,
+                "weights": "",
+                "schedule_every_n": 1,
+            },
+            "hazard_analyzer": {
+                "enabled": fall_enabled,
+                "sub_modules": {
+                    "fall": {
+                        "enabled": fall_enabled,
+                        "weights": "",
+                        "schedule_every_n": 1,
+                    },
+                },
+            },
+            "posture_analyzer": {
+                "enabled": ergonomics_enabled,
+                "weights": "",
+                "schedule_every_n": 10,
+            },
+            "proximity_analyzer": {
+                "enabled": proximity_enabled,
+                "weights": "weights/forklift/best_forklift.pt",
+                "schedule_every_n": 2,
+            },
+            "ppe_analyzer": {
+                "enabled": ppe_enabled,
+                "weights": "SH17dataset-master/yolo9e.pt",
+                "schedule_every_n": 2,
+            },
+        },
+        "ui": {
+            "enable_detections": True,
+            "enable_pose": pose_enabled,
+            "enable_zones": False,
+            "enable_hazards": fall_enabled or proximity_enabled or ergonomics_enabled,
+            "enable_worker_panels": ppe_enabled or ergonomics_enabled,
+            "enable_hud": True,
+            "enable_banners": False,
+            "overlay_scale": 1.0,
+            "max_worker_panels": 6 if ppe_enabled or ergonomics_enabled else 0,
+            "panel_anchor_mode": "auto_avoid_overlap",
+            "hazard_fill_critical": fall_enabled,
+            "hazard_fill_high": fall_enabled or proximity_enabled,
+            "hazard_fill_medium": ergonomics_enabled,
+            "banner_critical_sec": 3.0,
+            "banner_max": 2,
+            "perf_budget_ms": 2.0,
+            "auto_degrade": True,
+        },
+    }
+
+    with NamedTemporaryFile("w", suffix=".yaml", prefix="visionsafe_camera_profile_", delete=False) as handle:
+        yaml.safe_dump(profile, handle, sort_keys=False)
+        return handle.name

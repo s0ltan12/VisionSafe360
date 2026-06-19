@@ -36,6 +36,12 @@ class CameraSafetyZone(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
+    @property
+    def required_ppe(self) -> list[str]:
+        rules = self.rules if isinstance(self.rules, dict) else {}
+        value = rules.get("required_ppe") or []
+        return [str(item) for item in value] if isinstance(value, list) else []
+
 
 class CameraSafetyZoneEvent(Base):
     """Append-only event history for zone interactions and violations."""

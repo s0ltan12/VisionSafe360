@@ -264,6 +264,7 @@ class AlertManager:
                     event.event_type,
                     event.frame_number,
                 )
+                self._route_clip_fallback(event, reason="no_frames")
                 return
 
             # 4. Encode the clip to base64 MP4
@@ -283,6 +284,7 @@ class AlertManager:
                     event.event_type,
                     event.frame_number,
                 )
+                self._route_clip_fallback(event, reason="encode_failed")
                 return
 
             # 5. Attach clip details to event metadata
@@ -317,6 +319,22 @@ class AlertManager:
 
         except Exception as exc:
             logger.exception("Failed in _assemble_and_route_clip: %s", exc)
+            self._route_clip_fallback(event, reason="exception")
+
+    def _route_clip_fallback(self, event: HazardEvent, *, reason: str) -> None:
+        """Deliver the alert even when optional video-clip evidence is unavailable."""
+
+        if not isinstance(event.metadata, dict):
+            event.metadata = {}
+        event.metadata.setdefault("evidence_kind", "annotated_event_frame")
+        event.metadata["video_clip_fallback_reason"] = reason
+
+        if self.config.async_delivery_enabled:
+            self._enqueue_fcm(event)
+            self._enqueue_backend(event)
+        else:
+            self._route_fcm(event)
+            self._route_backend(event)
 
     def _attach_event_frame(self, events: list[HazardEvent], frame) -> None:
         """Attach the exact annotated frame from the hazard moment."""

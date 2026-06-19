@@ -37,11 +37,11 @@ modules:
 ui:
   enable_detections:    true
   enable_pose:          true
-  enable_zones:         false
+  enable_zones:         true
   enable_hazards:       true
   enable_worker_panels: false
   enable_hud:           true
-  enable_banners:       true
+  enable_banners:       false
   overlay_scale:        1.0
   max_worker_panels:    0
   hazard_fill_critical: true

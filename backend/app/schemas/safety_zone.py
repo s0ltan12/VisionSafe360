@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..utils.ppe import normalize_required_ppe
+
 ZoneType = Literal[
     "danger",
     "restricted",
@@ -14,6 +16,9 @@ ZoneType = Literal[
     "no_entry",
     "loading",
     "emergency_exit",
+    "ppe",
+    "ppe_required",
+    "maintenance",
     "custom",
 ]
 
@@ -26,7 +31,8 @@ class ZonePoint(BaseModel):
 class SafetyZoneRule(BaseModel):
     allowed_classes: list[str] = Field(default_factory=lambda: ["person", "forklift"])
     denied_classes: list[str] = Field(default_factory=list)
-    occupancy_threshold: int | None = Field(default=None, ge=1)
+    required_ppe: list[str] = Field(default_factory=list)
+    occupancy_threshold: int | None = Field(default=None, ge=0)
     dwell_time_limit_sec: float | None = Field(default=None, ge=0)
     cooldown_sec: float = Field(default=30.0, ge=0)
     min_persistence_sec: float = Field(default=0.5, ge=0)
@@ -42,6 +48,11 @@ class SafetyZoneRule(BaseModel):
             raise ValueError(f"unsupported object classes: {', '.join(invalid)}")
         return list(dict.fromkeys(cleaned))
 
+    @field_validator("required_ppe")
+    @classmethod
+    def validate_required_ppe(cls, value: list[str]) -> list[str]:
+        return normalize_required_ppe(value)
+
 
 class SafetyZoneBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -54,6 +65,7 @@ class SafetyZoneBase(BaseModel):
     enabled: bool = True
     priority: int = 100
     rules: SafetyZoneRule = Field(default_factory=SafetyZoneRule)
+    required_ppe: list[str] | None = None
     description: str | None = None
 
     @field_validator("polygon")
@@ -62,6 +74,13 @@ class SafetyZoneBase(BaseModel):
         if len(value) < 3:
             raise ValueError("polygon requires at least 3 points")
         return value
+
+    @field_validator("required_ppe")
+    @classmethod
+    def validate_top_level_required_ppe(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_required_ppe(value)
 
 
 class SafetyZoneCreate(SafetyZoneBase):
@@ -79,6 +98,7 @@ class SafetyZoneUpdate(BaseModel):
     enabled: bool | None = None
     priority: int | None = None
     rules: SafetyZoneRule | None = None
+    required_ppe: list[str] | None = None
     description: str | None = None
 
     @field_validator("polygon")
@@ -88,6 +108,13 @@ class SafetyZoneUpdate(BaseModel):
             raise ValueError("polygon requires at least 3 points")
         return value
 
+    @field_validator("required_ppe")
+    @classmethod
+    def validate_top_level_required_ppe(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_required_ppe(value)
+
 
 class SafetyZoneEnabledUpdate(BaseModel):
     enabled: bool
@@ -96,6 +123,7 @@ class SafetyZoneEnabledUpdate(BaseModel):
 class SafetyZoneOut(SafetyZoneBase):
     id: str
     camera_id: str
+    required_ppe: list[str] = Field(default_factory=list)
     created_by_id: str | None = None
     updated_by_id: str | None = None
     created_at: datetime | None = None
@@ -114,7 +142,7 @@ class SafetyZoneEventOut(BaseModel):
     stable_object_key: str
     severity: str
     occurred_at: datetime
-    duration_inside_sec: int | None = None
+    duration_inside_sec: float | None = None
     occupancy_count: int | None = None
     frame_number: int | None = None
     bbox: Any | None = None

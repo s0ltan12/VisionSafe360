@@ -168,13 +168,31 @@ def _prettify_event_type(event_type: str) -> str:
     return (key.replace("_", " ").strip().title() or "Safety Alert")
 
 
+def _ppe_display_title(ev: HazardEvent) -> str | None:
+    metadata = ev.metadata if isinstance(ev.metadata, dict) else {}
+    explicit = metadata.get("display_title") or metadata.get("alert_title")
+    if explicit:
+        return str(explicit)
+    missing_items = metadata.get("missing_ppe_items") or metadata.get("ppe_items") or []
+    if isinstance(missing_items, (list, tuple)) and missing_items:
+        items = ", ".join(str(item).replace("_", " ").strip() for item in missing_items)
+        return f"PPE missing {items}"
+    event_type = (ev.event_type or "").strip().lower()
+    if "ppe_missing_" in event_type:
+        item = event_type.split("ppe_missing_", 1)[-1].replace("_", " ").strip()
+        return f"PPE missing {item}" if item else "PPE missing"
+    if event_type == "ppe_missing":
+        return "PPE missing"
+    return None
+
+
 def _notification_copy(
     ev: HazardEvent,
     include_worker_id: bool,
     display_id_map: Optional[Dict[int, int]],
 ) -> tuple[str, str]:
     """Build detailed title/body copy for safety banners."""
-    title = _prettify_event_type(ev.event_type)
+    title = _ppe_display_title(ev) or _prettify_event_type(ev.event_type)
 
     if ev.track_id is not None:
         disp_id = (display_id_map or {}).get(ev.track_id, ev.track_id)
@@ -206,11 +224,23 @@ def _hazard_kind(event_type: str) -> str:
     return "alert"
 
 
+def _event_hazard_kind(ev: HazardEvent) -> str:
+    ppe_title = _ppe_display_title(ev)
+    if ppe_title:
+        lowered = ppe_title.lower()
+        if "vest" in lowered:
+            return "vest"
+        if "helmet" in lowered:
+            return "helmet"
+        return "ppe"
+    return _hazard_kind(ev.event_type)
+
+
 def _hazard_accent(ev: HazardEvent, t: IndustrialTheme) -> tuple[int, int, int]:
-    kind = _hazard_kind(ev.event_type)
+    kind = _event_hazard_kind(ev)
     if kind == "fall":
         return t.critical
-    if kind in ("vest", "helmet"):
+    if kind in ("vest", "helmet", "ppe"):
         return t.high
     if kind == "proximity":
         return t.warning
@@ -485,7 +515,7 @@ class BannersLayer:
             )
             meta_text = "VisionSafe"
             accent = _hazard_accent(ev, t)
-            kind = _hazard_kind(ev.event_type)
+            kind = _event_hazard_kind(ev)
 
             # Light card style matching the reference image while keeping
             # project palette for hazard color accents.

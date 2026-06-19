@@ -34,6 +34,7 @@ import {
 } from '../api';
 import { CameraSafetyZone, DemoVideo, Incident, JobStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import SafetyZonesOverlay from './SafetyZonesOverlay';
 
 const layoutButtonClass = (active: boolean) =>
 	`p-2 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vs-orange ${
@@ -128,6 +129,7 @@ interface MultiAiStreamState {
 }
 
 const makeMultiCameraId = (video: DemoVideo, index: number) => {
+	if (video.cameraId) return video.cameraId;
 	const safeId = video.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 28) || `source_${index + 1}`;
 	return `multi_${index + 1}_${safeId}`;
 };
@@ -246,57 +248,6 @@ const SourcePreview: React.FC<{ video: DemoVideo }> = ({ video }) => {
 				</div>
 			)}
 		</div>
-	);
-};
-
-const SafetyZonesOverlay: React.FC<{ zones: CameraSafetyZone[] }> = ({ zones }) => {
-	if (!zones.length) return null;
-	const ref = zones[0];
-	const sw = ref.sourceWidth || 1280;
-	const sh = ref.sourceHeight || 720;
-	return (
-		<svg
-			viewBox={`0 0 ${sw} ${sh}`}
-			preserveAspectRatio="xMidYMid meet"
-			className="pointer-events-none absolute inset-0 h-full w-full"
-			aria-hidden="true"
-		>
-			{zones.filter(z => z.enabled && z.polygon.length >= 3).map((zone) => {
-				const points = zone.polygon.map(p => `${p.x},${p.y}`).join(' ');
-				const labelPoint = zone.polygon[0];
-				return (
-					<g key={zone.id}>
-						<polygon
-							points={points}
-							fill={`${zone.color}26`}
-							stroke={zone.color}
-							strokeWidth={4}
-							strokeDasharray={zone.zoneType === 'allowed' ? '0' : '14 8'}
-						/>
-						<rect
-							x={labelPoint.x + 6}
-							y={labelPoint.y - 30}
-							width={(zone.name.length + 2) * 11}
-							height={26}
-							rx={6}
-							fill="rgba(0,0,0,0.78)"
-							stroke={zone.color}
-							strokeWidth={1.5}
-						/>
-						<text
-							x={labelPoint.x + 16}
-							y={labelPoint.y - 12}
-							fill={zone.color}
-							fontSize={16}
-							fontWeight={700}
-							fontFamily="ui-monospace, SFMono-Regular, monospace"
-						>
-							{zone.name}
-						</text>
-					</g>
-				);
-			})}
-		</svg>
 	);
 };
 
@@ -476,7 +427,7 @@ const LiveMonitoring = () => {
 		[multiStreamDescriptors],
 	);
 
-	const activeCameraId = jobStatus.cameraId || 'cam_01';
+	const activeCameraId = jobStatus.cameraId || selectedVideo?.cameraId || selectedVideo?.id || 'cam_01';
 	const recentIncidents = useMemo(() => incidents.slice(0, 10), [incidents]);
 
 	const upsertIncident = useCallback((incident: Incident) => {
@@ -562,7 +513,7 @@ const LiveMonitoring = () => {
 		image.src = imageUrl;
 	}, []);
 
-	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = 'cam_01') => {
+	const startJobForVideo = useCallback(async (video: DemoVideo, cameraId = video.cameraId || video.id) => {
 		const status = await JobsAPI.start(video.fileName, cameraId);
 		setJobStatus(status);
 		setJobError(null);
@@ -623,7 +574,7 @@ const LiveMonitoring = () => {
 			}
 			setAiState('starting');
 			setAiSessionActive(true);
-			await startJobForVideo(selectedVideo, 'cam_01');
+			await startJobForVideo(selectedVideo);
 		} catch (error: any) {
 			if (viewMode === 'ai') {
 				setAiSessionActive(false);

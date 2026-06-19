@@ -18,6 +18,7 @@ Hazard label format (below bbox):
 """
 from __future__ import annotations
 
+import time
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -47,11 +48,33 @@ def _sev_colour(sev: Severity, t: IndustrialTheme) -> Tuple[int, int, int]:
     }.get(sev, t.fg_secondary)
 
 
+def _ppe_display_title(event: HazardEvent) -> Optional[str]:
+    meta = event.metadata or {}
+    explicit = meta.get("display_title") or meta.get("alert_title")
+    if explicit:
+        return str(explicit)
+    missing_items = meta.get("missing_ppe_items") or meta.get("ppe_items") or []
+    if isinstance(missing_items, (list, tuple)) and missing_items:
+        items = ", ".join(str(item).replace("_", " ").strip() for item in missing_items)
+        return f"PPE missing {items}"
+    event_type = (event.event_type or "").lower()
+    if "ppe_missing_" in event_type:
+        item = event_type.split("ppe_missing_", 1)[-1].replace("_", " ").strip()
+        return f"PPE missing {item}" if item else "PPE missing"
+    if event_type == "ppe_missing":
+        return "PPE missing"
+    return None
+
+
 def build_hazard_label(event: HazardEvent, calibrated: bool) -> str:
     """Return a human-readable ASCII hazard label string."""
     et  = event.event_type
     sev = event.severity.name
     meta = event.metadata or {}
+
+    ppe_title = _ppe_display_title(event)
+    if ppe_title:
+        return f"[!] {ppe_title.upper()}"
 
     if "fall" in et:
         return "[!] FALL CONFIRMED"
@@ -100,6 +123,51 @@ class HazardsLayer:
         self.theme = theme
         self.cfg = cfg or UISettings()
         self._buf: np.ndarray | None = None
+        # Persistence cache: keep the most-recent hazard per key alive for a
+        # short hold window so the worker box lingers on the dashboard even if
+        # detection briefly drops. Keyed by (track_id, event_type).
+        # value = (event, last_seen_ts)
+        self._held: dict[tuple[Optional[int], str], tuple[HazardEvent, float]] = {}
+
+    def _merge_held_events(
+        self,
+        events: List[HazardEvent],
+        now: float,
+    ) -> List[HazardEvent]:
+        """Refresh the hold cache with live events and return live + still-held.
+
+        Live events are added/refreshed at *now*; cached events whose age is
+        within ``hazard_hold_sec`` are kept and re-emitted so their box/label
+        persists. Expired entries are dropped. Render-only telemetry and
+        bbox-less events are never held (they would freeze a stale overlay).
+        """
+        hold = float(self.cfg.hazard_hold_sec)
+
+        live_keys: set[tuple[Optional[int], str]] = set()
+        for ev in events:
+            if _is_render_only_telemetry(ev) or not ev.bbox:
+                continue
+            key = (getattr(ev, "track_id", None), getattr(ev, "event_type", ""))
+            self._held[key] = (ev, now)
+            live_keys.add(key)
+
+        if hold <= 0.0:
+            # Hold disabled: prune everything not live and return events as-is.
+            self._held = {k: v for k, v in self._held.items() if k in live_keys}
+            return events
+
+        merged: List[HazardEvent] = list(events)
+        expired: list[tuple[Optional[int], str]] = []
+        for key, (ev, ts_seen) in self._held.items():
+            if key in live_keys:
+                continue
+            if (now - ts_seen) <= hold:
+                merged.append(ev)
+            else:
+                expired.append(key)
+        for key in expired:
+            del self._held[key]
+        return merged
 
     def _overlay_buf(self, frame: np.ndarray) -> np.ndarray:
         """Return a pre-allocated buffer matching *frame* (avoids per-frame alloc)."""
@@ -114,8 +182,13 @@ class HazardsLayer:
         events: List[HazardEvent],
         calibrated: bool = False,
         display_id_map: Optional[Dict[int, int]] = None,
+        now: Optional[float] = None,
     ) -> None:
         """Render severity overlays and labels onto *frame* in-place."""
+        ts = now if now is not None else time.time()
+        # Merge in recently-held hazards so the worker box lingers a short
+        # moment for the dashboard operator.
+        events = self._merge_held_events(events, ts)
         if not events:
             return
 

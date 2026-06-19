@@ -158,7 +158,7 @@ class CompositeHazardEngine:
         matched: list[tuple[str, list[HazardEvent]]] = []
         if ppe_helmet and forklift_danger:
             matched.append(("COMPOSITE_PPE_FORKLIFT_RISK", [ppe_helmet[-1], forklift_danger[-1]]))
-        if ppe_vest and proximity:
+        if ppe_vest and proximity and not forklift_danger:
             matched.append(("COMPOSITE_PPE_PROXIMITY_RISK", [ppe_vest[-1], proximity[-1]]))
         if fall and proximity:
             matched.append(("COMPOSITE_FALL_PROXIMITY_RISK", [fall[-1], proximity[-1]]))
@@ -279,13 +279,25 @@ class CompositeHazardEngine:
 
     @staticmethod
     def _is_missing_helmet(event: HazardEvent) -> bool:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        missing_items = metadata.get("missing_ppe_items") or metadata.get("ppe_items") or []
         lowered = event.event_type.lower()
-        return "helmet" in lowered or "no_helmet" in lowered
+        return (
+            "helmet" in lowered
+            or "no_helmet" in lowered
+            or any("helmet" in str(item).lower() for item in missing_items)
+        )
 
     @staticmethod
     def _is_missing_vest(event: HazardEvent) -> bool:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        missing_items = metadata.get("missing_ppe_items") or metadata.get("ppe_items") or []
         lowered = event.event_type.lower()
-        return "vest" in lowered or "no_vest" in lowered
+        return (
+            "vest" in lowered
+            or "no_vest" in lowered
+            or any("vest" in str(item).lower() for item in missing_items)
+        )
 
     @staticmethod
     def _is_proximity(event: HazardEvent) -> bool:
@@ -358,7 +370,11 @@ def _correlation_id(
 def _component_hazard(event: HazardEvent) -> dict:
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     lowered = event.event_type.lower()
-    if "helmet" in lowered:
+    missing_items = metadata.get("missing_ppe_items") or metadata.get("ppe_items") or []
+    if missing_items:
+        label = "Missing " + ", ".join(str(item).replace("_", " ").title() for item in missing_items)
+        category = "PPE"
+    elif "helmet" in lowered:
         label = "Missing Helmet"
         category = "PPE"
     elif "vest" in lowered:

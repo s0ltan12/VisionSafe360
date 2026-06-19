@@ -15,6 +15,127 @@ from ..schemas.safety_zone import (
     SafetyZoneEnabledUpdate,
     SafetyZoneUpdate,
 )
+from ..utils.ppe import normalize_required_ppe
+
+SUPPORTED_ZONE_CLASSES = ("person", "forklift")
+PPE_ZONE_TYPES = {"ppe", "ppe_required"}
+
+DEFAULT_ZONE_CONFIG: dict[str, dict[str, Any]] = {
+    "danger": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": 0,
+        "dwell_time_limit_sec": 3,
+        "cooldown_sec": 5,
+        "min_persistence_sec": 0.5,
+        "severity": "Critical",
+    },
+    "no_entry": {
+        "allowed_classes": [],
+        "denied_classes": ["person", "forklift"],
+        "required_ppe": [],
+        "occupancy_threshold": 0,
+        "dwell_time_limit_sec": 0,
+        "cooldown_sec": 0,
+        "min_persistence_sec": 0.5,
+        "severity": "Critical",
+    },
+    "forklift_only": {
+        "allowed_classes": ["forklift"],
+        "denied_classes": ["person"],
+        "required_ppe": [],
+        "occupancy_threshold": 1,
+        "dwell_time_limit_sec": 0,
+        "cooldown_sec": 10,
+        "min_persistence_sec": 0.5,
+        "severity": "High",
+    },
+    "pedestrian_only": {
+        "allowed_classes": ["person"],
+        "denied_classes": ["forklift"],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 0,
+        "cooldown_sec": 15,
+        "min_persistence_sec": 0.5,
+        "severity": "High",
+    },
+    "restricted": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 30,
+        "cooldown_sec": 30,
+        "min_persistence_sec": 0.5,
+        "severity": "Medium",
+    },
+    "loading": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 10,
+        "cooldown_sec": 20,
+        "min_persistence_sec": 0.5,
+        "severity": "High",
+    },
+    "emergency_exit": {
+        "allowed_classes": [],
+        "denied_classes": ["person", "forklift"],
+        "required_ppe": [],
+        "occupancy_threshold": 0,
+        "dwell_time_limit_sec": 0,
+        "cooldown_sec": 0,
+        "min_persistence_sec": 0.5,
+        "severity": "Critical",
+    },
+    "ppe": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 15,
+        "cooldown_sec": 25,
+        "min_persistence_sec": 0.5,
+        "severity": "Medium",
+    },
+    "ppe_required": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 15,
+        "cooldown_sec": 25,
+        "min_persistence_sec": 0.5,
+        "severity": "Medium",
+    },
+    "maintenance": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": 4,
+        "dwell_time_limit_sec": 60,
+        "cooldown_sec": 30,
+        "min_persistence_sec": 0.5,
+        "severity": "Medium",
+    },
+    "custom": {
+        "allowed_classes": ["person", "forklift"],
+        "denied_classes": [],
+        "required_ppe": [],
+        "occupancy_threshold": None,
+        "dwell_time_limit_sec": 10,
+        "cooldown_sec": 30,
+        "min_persistence_sec": 0.5,
+        "severity": "Medium",
+    },
+}
+
+LOCKED_ZONE_TYPES = {zone_type for zone_type in DEFAULT_ZONE_CONFIG if zone_type != "custom"}
+FULL_DENY_ZONE_TYPES = {"no_entry", "emergency_exit"}
+_REQUIRED_PPE_UNSET = object()
 
 
 def _dump_rules(rules: Any) -> dict:
@@ -25,11 +146,121 @@ def _dump_rules(rules: Any) -> dict:
     return dict(rules)
 
 
+def _copy_default_rules(zone_type: str) -> dict:
+    defaults = DEFAULT_ZONE_CONFIG.get(zone_type)
+    if defaults is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported safety zone type: {zone_type}")
+    return {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in defaults.items()
+    }
+
+
+def _normalize_rules(raw_rules: Any) -> dict:
+    rules = {**_copy_default_rules("custom"), **_dump_rules(raw_rules)}
+    allowed = [str(item).strip().lower() for item in rules.get("allowed_classes") or [] if str(item).strip()]
+    denied = [str(item).strip().lower() for item in rules.get("denied_classes") or [] if str(item).strip()]
+    invalid = sorted((set(allowed) | set(denied)) - set(SUPPORTED_ZONE_CLASSES))
+    if invalid:
+        raise HTTPException(status_code=422, detail=f"Unsupported object classes: {', '.join(invalid)}")
+
+    allowed = list(dict.fromkeys(allowed))
+    explicit_denied = list(dict.fromkeys(denied))
+    denied = list(dict.fromkeys([*explicit_denied, *(item for item in SUPPORTED_ZONE_CLASSES if item not in allowed)]))
+
+    occupancy_threshold = rules.get("occupancy_threshold")
+    if occupancy_threshold in ("", None):
+        occupancy_threshold = None
+    else:
+        occupancy_threshold = int(occupancy_threshold)
+        if occupancy_threshold < 0:
+            raise HTTPException(status_code=422, detail="occupancy_threshold must be greater than or equal to 0")
+
+    dwell_time_limit_sec = rules.get("dwell_time_limit_sec")
+    if dwell_time_limit_sec in ("", None):
+        dwell_time_limit_sec = None
+    else:
+        dwell_time_limit_sec = float(dwell_time_limit_sec)
+        if dwell_time_limit_sec < 0:
+            raise HTTPException(status_code=422, detail="dwell_time_limit_sec must be greater than or equal to 0")
+
+    cooldown_sec = float(rules.get("cooldown_sec", 30))
+    min_persistence_sec = float(rules.get("min_persistence_sec", 0.5))
+    if cooldown_sec < 0:
+        raise HTTPException(status_code=422, detail="cooldown_sec must be greater than or equal to 0")
+    if min_persistence_sec < 0:
+        raise HTTPException(status_code=422, detail="min_persistence_sec must be greater than or equal to 0")
+
+    severity = str(rules.get("severity") or "Medium").strip().title()
+    if severity not in {"Low", "Medium", "High", "Critical"}:
+        raise HTTPException(status_code=422, detail="severity must be Low, Medium, High, or Critical")
+
+    try:
+        required_ppe = normalize_required_ppe(rules.get("required_ppe") or rules.get("requiredPpe") or [])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "allowed_classes": allowed,
+        "denied_classes": denied,
+        "required_ppe": required_ppe,
+        "occupancy_threshold": occupancy_threshold,
+        "dwell_time_limit_sec": dwell_time_limit_sec,
+        "cooldown_sec": cooldown_sec,
+        "min_persistence_sec": min_persistence_sec,
+        "severity": severity,
+    }
+
+
+def _rules_with_required_ppe(raw_rules: Any, required_ppe: Any = _REQUIRED_PPE_UNSET) -> dict:
+    rules = _dump_rules(raw_rules)
+    if required_ppe is not _REQUIRED_PPE_UNSET:
+        rules["required_ppe"] = required_ppe or []
+    return rules
+
+
+def resolve_zone_rules(zone_type: str, raw_rules: Any = None) -> dict:
+    if zone_type in LOCKED_ZONE_TYPES:
+        if zone_type in PPE_ZONE_TYPES:
+            raw = _dump_rules(raw_rules)
+            try:
+                return _normalize_rules(
+                    {
+                        **_copy_default_rules(zone_type),
+                        **raw,
+                        "required_ppe": raw.get("required_ppe") or raw.get("requiredPpe") or [],
+                    }
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _copy_default_rules(zone_type)
+
+    rules = _normalize_rules(raw_rules)
+    if not rules["allowed_classes"] and zone_type not in FULL_DENY_ZONE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="Denying both people and forklifts is only allowed for No Entry and Emergency Exit zones",
+        )
+    return rules
+
+
 def _dump_polygon(polygon: Any) -> list[dict]:
     return [
         point.model_dump() if hasattr(point, "model_dump") else {"x": point["x"], "y": point["y"]}
         for point in polygon
     ]
+
+
+def _compact_event_metadata(metadata: Any) -> dict | None:
+    if not isinstance(metadata, dict):
+        return None
+    bulky_keys = {
+        "event_frame_data_url",
+        "snapshot_data_url",
+        "clip_thumbnail_data_url",
+        "video_evidence_data_url",
+    }
+    return {key: value for key, value in metadata.items() if key not in bulky_keys}
 
 
 class SafetyZoneService:
@@ -61,6 +292,13 @@ class SafetyZoneService:
         camera = db.query(Camera).filter(Camera.id == camera_id).first()
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
+        resolved_rules = resolve_zone_rules(
+            payload.zone_type,
+            _rules_with_required_ppe(
+                payload.rules,
+                payload.required_ppe if payload.required_ppe is not None else _REQUIRED_PPE_UNSET,
+            ),
+        )
         zone = CameraSafetyZone(
             id=payload.id or f"CSZ-{uuid.uuid4().hex[:12]}",
             camera_id=camera_id,
@@ -73,7 +311,7 @@ class SafetyZoneService:
             color=payload.color,
             enabled=payload.enabled,
             priority=payload.priority,
-            rules=_dump_rules(payload.rules),
+            rules=resolved_rules,
             description=payload.description,
             created_by_id=actor_id,
             updated_by_id=actor_id,
@@ -97,8 +335,18 @@ class SafetyZoneService:
         changes = payload.model_dump(exclude_unset=True)
         if "polygon" in changes and payload.polygon is not None:
             changes["polygon"] = _dump_polygon(payload.polygon)
-        if "rules" in changes and payload.rules is not None:
-            changes["rules"] = _dump_rules(payload.rules)
+        next_zone_type = str(changes.get("zone_type") or zone.zone_type)
+        if "zone_type" in changes or "rules" in changes or "required_ppe" in changes:
+            required_ppe = (
+                changes.pop("required_ppe")
+                if "required_ppe" in changes
+                else _REQUIRED_PPE_UNSET
+            )
+            submitted_rules = _rules_with_required_ppe(
+                payload.rules if "rules" in changes else zone.rules,
+                required_ppe,
+            )
+            changes["rules"] = resolve_zone_rules(next_zone_type, submitted_rules)
         for field, value in changes.items():
             setattr(zone, field, value)
         zone.updated_by_id = actor_id
@@ -147,7 +395,10 @@ class SafetyZoneService:
             query = query.filter(CameraSafetyZoneEvent.zone_id == zone_id)
         if camera_id:
             query = query.filter(CameraSafetyZoneEvent.camera_id == camera_id)
-        return query.order_by(CameraSafetyZoneEvent.occurred_at.desc()).offset(skip).limit(limit).all()
+        events = query.order_by(CameraSafetyZoneEvent.occurred_at.desc()).offset(skip).limit(limit).all()
+        for event in events:
+            event.event_metadata = _compact_event_metadata(event.event_metadata)
+        return events
 
     @staticmethod
     def stats_for_zone(db: Session, zone_id: str) -> dict:
@@ -182,7 +433,7 @@ class SafetyZoneService:
                     "color": zone.color,
                     "enabled": zone.enabled,
                     "priority": zone.priority,
-                    "rules": zone.rules or {},
+                    "rules": resolve_zone_rules(str(zone.zone_type), zone.rules),
                 }
                 for zone in zones
             ],

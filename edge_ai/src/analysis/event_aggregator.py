@@ -76,11 +76,12 @@ class ProximityCaseState:
 class EventAggregator:
     """Persistence + cooldown + deduplication for hazard events."""
 
-    def __init__(self) -> None:
+    def __init__(self, hazard_cooldown_sec: Optional[float] = None) -> None:
         self._pending: Dict[CooldownKey, PendingEvent] = {}
         self._active: Dict[CooldownKey, ActiveEvent] = {}
         self._cooldowns: Dict[CooldownKey, float] = {}
         self._proximity_cases: Dict[Tuple, ProximityCaseState] = {}
+        self._hazard_cooldown_sec = max(0.0, float(hazard_cooldown_sec)) if hazard_cooldown_sec is not None else HAZARD_COOLDOWN_SEC
         self._severity_engine = SeverityEngine()
         self._escalation_engine = EscalationEngine()
 
@@ -140,6 +141,21 @@ class EventAggregator:
                     "reopened",
                 }:
                     emitted.append(self._lifecycle_event(event, lifecycle, timestamp, active_duration))
+                    continue
+                if (
+                    not self._is_operational_proximity(event)
+                    and not within_update_window
+                    and timestamp >= self._cooldowns.get(key, 0.0)
+                ):
+                    repeated = self._with_lifecycle(event, "repeated", timestamp)
+                    emitted.append(repeated)
+                    self._active[key] = ActiveEvent(
+                        event=repeated,
+                        emitted_at=timestamp,
+                        last_update=timestamp,
+                        max_severity=repeated.severity,
+                    )
+                    self._cooldowns[key] = timestamp + self._cooldown_for(event)
                     continue
                 timed_escalation = self._escalation_engine.check(
                     key,
@@ -370,19 +386,18 @@ class EventAggregator:
             return PROXIMITY_PERSISTENCE_SEC
         return 0.0  # posture, etc.
 
-    @staticmethod
-    def _cooldown_for(event: HazardEvent) -> float:
+    def _cooldown_for(self, event: HazardEvent) -> float:
         """Cooldown duration after emission."""
         if "fall" in event.event_type:
-            return FALL_COOLDOWN_SEC
+            return self._hazard_cooldown_sec
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
         if event.event_type.startswith("zone_"):
             rules = metadata.get("zone_rules") if isinstance(metadata.get("zone_rules"), dict) else {}
             try:
-                return float(rules.get("cooldown_sec", HAZARD_COOLDOWN_SEC))
+                return float(rules.get("cooldown_sec", self._hazard_cooldown_sec))
             except (TypeError, ValueError):
-                return HAZARD_COOLDOWN_SEC
-        return HAZARD_COOLDOWN_SEC
+                return self._hazard_cooldown_sec
+        return self._hazard_cooldown_sec
 
     @staticmethod
     def _zone_config_for(event: HazardEvent) -> dict:
@@ -581,8 +596,6 @@ class EventAggregator:
 
     @staticmethod
     def _with_lifecycle(event: HazardEvent, lifecycle: str, timestamp: float) -> HazardEvent:
-        if not EventAggregator._is_operational_proximity(event):
-            return event
         metadata = {**event.metadata, "event_lifecycle": lifecycle, "lifecycle": lifecycle}
         return HazardEvent(
             event_type=event.event_type,

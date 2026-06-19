@@ -19,7 +19,7 @@ def _det(class_name: str, bbox, track_id=None):
     )
 
 
-def test_person_entering_danger_zone_emits_zone_event():
+def test_person_in_danger_zone_emits_specific_alert():
     engine = SafetyZoneEngine()
     engine.set_camera_zones("CAM-01", [{
         "id": "CSZ-1",
@@ -40,9 +40,42 @@ def test_person_entering_danger_zone_emits_zone_event():
     )
 
     assert len(events) == 1
-    assert events[0].event_type == "zone_person_entered"
+    assert events[0].event_type == "zone_person_in_danger"
+    assert events[0].description == "Worker in danger zone: Danger Zone"
     assert events[0].metadata["safety_zone_id"] == "CSZ-1"
     assert events[0].metadata["object_class"] == "person"
+    assert events[0].metadata["safety_zone_snapshot"]["id"] == "CSZ-1"
+    assert events[0].metadata["safety_zone_snapshot"]["polygon"][0] == {"x": 100.0, "y": 100.0}
+
+
+def test_person_leaving_danger_zone_does_not_emit_operator_alert():
+    engine = SafetyZoneEngine()
+    engine.set_camera_zones("CAM-01", [{
+        "id": "CSZ-1",
+        "name": "Danger Zone",
+        "zone_type": "danger",
+        "polygon": [{"x": 100, "y": 100}, {"x": 300, "y": 100}, {"x": 300, "y": 300}, {"x": 100, "y": 300}],
+        "source_width": 640,
+        "source_height": 480,
+        "rules": {"severity": "Critical", "cooldown_sec": 0},
+    }])
+    engine.analyze(
+        [_det("person", (140, 120, 180, 180), track_id=7)],
+        camera_id="CAM-01",
+        frame_number=1,
+        timestamp=100.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    events = engine.analyze(
+        [_det("person", (340, 120, 380, 180), track_id=7)],
+        camera_id="CAM-01",
+        frame_number=2,
+        timestamp=101.0,
+        frame_shape=(480, 640, 3),
+    )
+
+    assert events == []
 
 
 def test_forklift_entering_pedestrian_zone_emits_specific_violation():
@@ -65,7 +98,34 @@ def test_forklift_entering_pedestrian_zone_emits_specific_violation():
         frame_shape=(480, 640, 3),
     )
 
-    assert [event.event_type for event in events] == ["zone_forklift_entered_pedestrian_zone"]
+    assert [event.event_type for event in events] == ["zone_forklift_in_pedestrian_zone"]
+    assert events[0].description == "Forklift in pedestrian walkway: Pedestrian Lane"
+
+
+def test_no_entry_empty_allowed_classes_denies_person_and_respects_zero_cooldown():
+    engine = SafetyZoneEngine()
+    engine.set_camera_zones("CAM-01", [{
+        "id": "CSZ-NO-ENTRY",
+        "name": "Emergency Exit",
+        "zone_type": "no_entry",
+        "polygon": [{"x": 0, "y": 0}, {"x": 200, "y": 0}, {"x": 200, "y": 200}, {"x": 0, "y": 200}],
+        "source_width": 640,
+        "source_height": 480,
+        "rules": {
+            "allowed_classes": [],
+            "denied_classes": ["person", "forklift"],
+            "severity": "Critical",
+            "cooldown_sec": 0,
+        },
+    }])
+
+    person = _det("person", (50, 50, 100, 100), track_id=11)
+    first = engine.analyze([person], camera_id="CAM-01", frame_number=1, timestamp=100.0, frame_shape=(480, 640, 3))
+    engine.analyze([], camera_id="CAM-01", frame_number=2, timestamp=104.0, frame_shape=(480, 640, 3))
+    second = engine.analyze([person], camera_id="CAM-01", frame_number=3, timestamp=105.0, frame_shape=(480, 640, 3))
+
+    assert [event.event_type for event in first] == ["zone_person_in_danger"]
+    assert [event.event_type for event in second] == ["zone_person_in_danger"]
 
 
 def test_dwell_limit_emits_once_while_inside():
@@ -122,7 +182,7 @@ def test_forklift_zone_ignores_driver_center_inside_forklift_box():
         frame_shape=(480, 640, 3),
     )
 
-    assert not any(event.event_type == "zone_unauthorized_entry" for event in events)
+    assert not any(event.event_type == "zone_person_in_forklift_lane" for event in events)
 
 
 def test_forklift_zone_alerts_for_worker_but_not_driver():
@@ -140,9 +200,10 @@ def test_forklift_zone_alerts_for_worker_but_not_driver():
         frame_shape=(480, 640, 3),
     )
 
-    violations = [event for event in events if event.event_type == "zone_unauthorized_entry"]
+    violations = [event for event in events if event.event_type == "zone_person_in_forklift_lane"]
     assert len(violations) == 1
     assert violations[0].track_id == 2
+    assert violations[0].description == "Worker in forklift lane: Forklift Lane"
 
 
 def test_forklift_zone_alerts_for_worker_alone():
@@ -156,7 +217,7 @@ def test_forklift_zone_alerts_for_worker_alone():
         frame_shape=(480, 640, 3),
     )
 
-    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert [event.event_type for event in events] == ["zone_person_in_forklift_lane"]
     assert events[0].track_id == 1
 
 
@@ -184,7 +245,7 @@ def test_forklift_zone_alerts_when_driver_exits_forklift_box():
         frame_shape=(480, 640, 3),
     )
 
-    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert [event.event_type for event in events] == ["zone_person_in_forklift_lane"]
     assert events[0].track_id == 1
 
 
@@ -202,5 +263,5 @@ def test_forklift_zone_requires_containing_forklift_to_be_inside_same_zone():
         frame_shape=(480, 640, 3),
     )
 
-    assert [event.event_type for event in events] == ["zone_unauthorized_entry"]
+    assert [event.event_type for event in events] == ["zone_person_in_forklift_lane"]
     assert events[0].track_id == 1

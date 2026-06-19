@@ -73,6 +73,7 @@ class Alert(Base):
     false_positive_by = Column(String, nullable=True)
     false_positive_by_id = Column(String, nullable=True)
     false_positive_at = Column(DateTime(timezone=True), nullable=True)
+    event_metadata = Column(JSON, nullable=True)
     created_at  = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     incident = relationship("Incident", back_populates="alerts")

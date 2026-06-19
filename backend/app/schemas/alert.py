@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -49,6 +49,7 @@ class AlertBase(BaseModel):
     false_positive_by: Optional[str] = None
     false_positive_by_id: Optional[str] = None
     false_positive_at: Optional[datetime] = None
+    event_metadata: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 

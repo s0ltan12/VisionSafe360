@@ -2,21 +2,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Camera, Activity, Trash2, Edit2, CheckCircle2, X,
-  Play, Square, Wifi, WifiOff, Link, Loader2, Radio, Map,
-  Upload, Video, Globe, FileVideo,
+  Wifi, Link, Loader2, Radio, Map,
+  Upload, Video, Globe, FileVideo, ShieldCheck, SlidersHorizontal,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { CamerasAPI } from '../api';
 import { Camera as CameraType, CameraSourceType } from '../types';
 import CameraZoneManager from './CameraZoneManager';
 
-type StreamState = 'idle' | 'starting' | 'streaming' | 'stopping' | 'error';
+type StreamState = 'idle' | 'error';
+type CameraAiCapability = 'ppe' | 'fall' | 'proximity' | 'ergonomics';
 
 interface CameraCardState {
   streamState: StreamState;
   editingUrl: boolean;
   pendingUrl: string;
   savingUrl: boolean;
+  editingRole: boolean;
+  savingRole: boolean;
+  pendingCapabilities: CameraAiCapability[];
+  pendingCooldownSec: number;
   errorMsg: string | null;
 }
 
@@ -25,8 +30,69 @@ const defaultCardState = (): CameraCardState => ({
   editingUrl: false,
   pendingUrl: '',
   savingUrl: false,
+  editingRole: false,
+  savingRole: false,
+  pendingCapabilities: ['ppe', 'fall', 'proximity', 'ergonomics'],
+  pendingCooldownSec: 50,
   errorMsg: null,
 });
+
+const AI_CAPABILITY_OPTIONS: Array<{
+  value: CameraAiCapability;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'ppe',
+    label: 'PPE Compliance',
+    description: 'Helmet, vest, gloves, mask, suit, shoes, and related PPE checks.',
+  },
+  {
+    value: 'fall',
+    label: 'Fall Detection',
+    description: 'Detect worker falls and sudden collapse events.',
+  },
+  {
+    value: 'proximity',
+    label: 'Forklift Proximity',
+    description: 'Detect person and forklift proximity hazards.',
+  },
+  {
+    value: 'ergonomics',
+    label: 'Ergonomics',
+    description: 'Assess posture, RULA/REBA risk, bending, and awkward movement.',
+  },
+];
+
+const DEFAULT_AI_CAPABILITIES: CameraAiCapability[] = ['ppe', 'fall', 'proximity', 'ergonomics'];
+
+const normalizeSelectedCapabilities = (values: unknown): CameraAiCapability[] => {
+  if (!Array.isArray(values)) return [];
+  const selected = values.filter((item): item is CameraAiCapability =>
+    AI_CAPABILITY_OPTIONS.some(option => option.value === item)
+  );
+  return Array.from(new Set(selected));
+};
+
+const normalizeStoredCapabilities = (values: unknown): CameraAiCapability[] => {
+  const selected = normalizeSelectedCapabilities(values);
+  return selected.length > 0 ? selected : DEFAULT_AI_CAPABILITIES;
+};
+
+const getCameraCapabilities = (cam: CameraType): CameraAiCapability[] =>
+  normalizeStoredCapabilities(cam.supportedAiCapabilities);
+
+const getCapabilitySummary = (capabilities: CameraAiCapability[]) => {
+  const normalized = normalizeStoredCapabilities(capabilities);
+  if (normalized.length === AI_CAPABILITY_OPTIONS.length) return 'Full Safety Suite';
+  return AI_CAPABILITY_OPTIONS
+    .filter(option => normalized.includes(option.value))
+    .map(option => option.label)
+    .join(', ');
+};
+
+const getSeverityProfile = (capabilities: CameraAiCapability[]) => `custom:${normalizeSelectedCapabilities(capabilities).join('+')}`;
+const getCameraCooldown = (cam: CameraType): number => Math.max(0, Number(cam.aiAlertCooldownSec ?? 50));
 
 const SOURCE_TYPE_STYLES: Record<CameraSourceType, { label: string; Icon: any; cls: string }> = {
   rtsp:     { label: 'RTSP',     Icon: Wifi,      cls: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
@@ -73,7 +139,14 @@ const CameraManagement = () => {
       // Initialize card states for new cameras
       setCardStates(prev => {
         const next = { ...prev };
-        data.forEach(c => { if (!next[c.id]) next[c.id] = defaultCardState(); });
+        data.forEach(c => {
+          const cameraState = {
+            pendingCapabilities: getCameraCapabilities(c),
+            pendingCooldownSec: getCameraCooldown(c),
+          };
+          if (!next[c.id]) next[c.id] = { ...defaultCardState(), ...cameraState };
+          else next[c.id] = { ...next[c.id], ...cameraState };
+        });
         return next;
       });
     } catch (e) {
@@ -226,40 +299,59 @@ const CameraManagement = () => {
     }
   };
 
-  // ── Stream control ─────────────────────────────────────────────────
-  const handleStartStream = async (cam: CameraType) => {
-    setCardField(cam.id, { streamState: 'starting', errorMsg: null });
-    try {
-      await CamerasAPI.startStream(cam.id);
-      setCardField(cam.id, { streamState: 'streaming' });
-      setCameras(prev => prev.map(c => c.id === cam.id ? { ...c, status: 'Online' } : c));
-    } catch (e: any) {
-      setCardField(cam.id, { streamState: 'error', errorMsg: e.message || 'Failed to start stream' });
-    }
+  // ── AI role configuration ──────────────────────────────────────────
+  const handleStartEditRole = (cam: CameraType) => {
+    setCardField(cam.id, {
+      editingRole: true,
+      pendingCapabilities: getCameraCapabilities(cam),
+      pendingCooldownSec: getCameraCooldown(cam),
+      errorMsg: null,
+    });
   };
 
-  const handleStopStream = async (cam: CameraType) => {
-    setCardField(cam.id, { streamState: 'stopping', errorMsg: null });
+  const updatePendingCapability = (cameraId: string, capability: CameraAiCapability, enabled: boolean) => {
+    const state = cardStates[cameraId] || defaultCardState();
+    const selected = new Set(state.pendingCapabilities);
+    if (enabled) selected.add(capability);
+    else selected.delete(capability);
+    setCardField(cameraId, { pendingCapabilities: Array.from(selected) as CameraAiCapability[] });
+  };
+
+  const handleSaveRole = async (cam: CameraType) => {
+    const state = cardStates[cam.id];
+    if (!state) return;
+    const capabilities = normalizeSelectedCapabilities(state.pendingCapabilities);
+    const cooldownSec = Math.max(0, Math.min(3600, Number(state.pendingCooldownSec || 0)));
+    if (capabilities.length === 0) {
+      setCardField(cam.id, { errorMsg: 'Select at least one AI module for this camera.' });
+      return;
+    }
+    setCardField(cam.id, { savingRole: true, errorMsg: null });
     try {
-      await CamerasAPI.stopStream(cam.id);
-      setCardField(cam.id, { streamState: 'idle' });
+      const updated = await CamerasAPI.update(cam.id, {
+        severityProfile: getSeverityProfile(capabilities),
+        supportedAiCapabilities: capabilities,
+        aiAlertCooldownSec: cooldownSec,
+      });
+      setCameras(prev => prev.map(c => c.id === cam.id ? updated : c));
+      setCardField(cam.id, {
+        editingRole: false,
+        savingRole: false,
+        pendingCapabilities: capabilities,
+        pendingCooldownSec: cooldownSec,
+        errorMsg: null,
+      });
     } catch (e: any) {
-      setCardField(cam.id, { streamState: 'error', errorMsg: e.message || 'Failed to stop stream' });
+      setCardField(cam.id, { savingRole: false, errorMsg: e.message || 'Failed to save AI role' });
     }
   };
 
   const getStreamBadge = (state: StreamState) => {
     switch (state) {
-      case 'streaming':
-        return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse"><Radio size={8} />STREAMING</span>;
-      case 'starting':
-        return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30"><Loader2 size={8} className="animate-spin" />STARTING</span>;
-      case 'stopping':
-        return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-500/20 text-zinc-400 border border-zinc-500/30"><Loader2 size={8} className="animate-spin" />STOPPING</span>;
       case 'error':
         return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">ERROR</span>;
       default:
-        return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-500 border border-zinc-700">IDLE</span>;
+        return <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-500 border border-zinc-700">CONFIGURED</span>;
     }
   };
 
@@ -296,6 +388,8 @@ const CameraManagement = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {cameras.map((cam) => {
             const cs = cardStates[cam.id] || defaultCardState();
+            const activeCapabilities = getCameraCapabilities(cam);
+            const activeCooldownSec = getCameraCooldown(cam);
             return (
               <div key={cam.id} className="bg-[#0f0f11] border border-zinc-800 rounded-xl overflow-hidden group hover:border-vs-orange/50 transition-all">
                 {/* Thumbnail */}
@@ -383,32 +477,124 @@ const CameraManagement = () => {
                     )}
                   </div>
 
-                  {/* Stream Controls */}
-                  <div className="grid grid-cols-[1fr_auto] gap-2">
-                    {cs.streamState === 'streaming' ? (
-                      <button
-                        onClick={() => handleStopStream(cam)}
-                        disabled={cs.streamState === 'stopping'}
-                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-colors disabled:opacity-50"
-                      >
-                        <Square size={13} />
-                        Stop Stream
-                      </button>
+                  {/* Camera AI role */}
+                  <div className="rounded-lg border border-zinc-800 bg-black/35 p-3 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <label className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider flex items-center gap-1">
+                          <ShieldCheck size={10} /> Camera AI Role
+                        </label>
+                        <p className="mt-1 text-sm font-bold text-zinc-100">{getCapabilitySummary(activeCapabilities)}</p>
+                        <p className="mt-0.5 text-[11px] leading-4 text-zinc-500">Select one or more modules. The edge worker combines them into one camera pipeline.</p>
+                        <p className="mt-1 text-[11px] font-mono text-zinc-500">Cooldown: {activeCooldownSec}s</p>
+                      </div>
+                      {!cs.editingRole && (
+                        <button
+                          onClick={() => handleStartEditRole(cam)}
+                          className="shrink-0 p-2 rounded-md border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-vs-orange hover:border-vs-orange/40 transition-colors"
+                          title="Configure camera AI role"
+                        >
+                          <SlidersHorizontal size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {cs.editingRole ? (
+                      <div className="space-y-3">
+                        <p className="text-[11px] leading-4 text-zinc-500">
+                          Choose the hazards this camera owns: PPE, fall, forklift proximity, ergonomics, or any combination.
+                        </p>
+                        <div className="grid grid-cols-1 gap-2">
+                          {AI_CAPABILITY_OPTIONS.map(option => {
+                            const checked = cs.pendingCapabilities.includes(option.value);
+                            return (
+                              <label
+                                key={option.value}
+                                className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 transition-colors ${checked ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-zinc-800 bg-black/60 hover:border-zinc-700'}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={e => updatePendingCapability(cam.id, option.value, e.target.checked)}
+                                  className="mt-0.5 h-4 w-4 accent-vs-orange"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block text-xs font-bold text-zinc-100">{option.label}</span>
+                                  <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">{option.description}</span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="rounded-lg border border-zinc-800 bg-black/60 p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider">AI Alert Cooldown</label>
+                            <span className="text-[10px] font-mono text-zinc-500">seconds</span>
+                          </div>
+                          <input
+                            type="number"
+                            min={0}
+                            max={3600}
+                            step={1}
+                            value={cs.pendingCooldownSec}
+                            onChange={e => setCardField(cam.id, { pendingCooldownSec: Math.max(0, Math.min(3600, Number(e.target.value || 0))) })}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-vs-orange"
+                          />
+                          <div className="grid grid-cols-4 gap-1.5">
+                            {[10, 30, 50, 120].map(value => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setCardField(cam.id, { pendingCooldownSec: value })}
+                                className={`rounded-md border px-2 py-1 text-[10px] font-bold transition-colors ${cs.pendingCooldownSec === value ? 'border-vs-orange bg-vs-orange/15 text-vs-orange' : 'border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-200'}`}
+                              >
+                                {value}s
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[11px] leading-4 text-zinc-600">
+                            Suppresses repeated alerts from this camera after one is emitted.
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleSaveRole(cam)}
+                            disabled={cs.savingRole || cs.pendingCapabilities.length === 0}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-vs-orange px-3 py-2 text-xs font-bold text-black disabled:opacity-60"
+                          >
+                            {cs.savingRole ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                            Apply Modules
+                          </button>
+                          <button
+                            onClick={() => setCardField(cam.id, { editingRole: false, pendingCapabilities: getCameraCapabilities(cam), pendingCooldownSec: getCameraCooldown(cam) })}
+                            className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-zinc-400 hover:text-white"
+                            title="Cancel"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
                     ) : (
                       <button
-                        onClick={() => handleStartStream(cam)}
-                        disabled={!cam.stream_url || cs.streamState === 'starting'}
-                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-bold hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={!cam.stream_url ? 'Set a stream URL first' : 'Start AI stream'}
+                        onClick={() => handleStartEditRole(cam)}
+                        className="w-full flex items-center justify-center gap-2 py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs font-bold hover:bg-emerald-500/20 transition-colors"
+                        title="Choose which hazard AI modules run for this camera"
                       >
-                        {cs.streamState === 'starting' ? (
-                          <Loader2 size={13} className="animate-spin" />
-                        ) : (
-                          <Play size={13} />
-                        )}
-                        Start Stream
+                        <SlidersHorizontal size={13} />
+                        Configure AI Role
                       </button>
                     )}
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <button
+                      className="w-full flex items-center justify-center gap-2 py-2 bg-vs-orange/10 border border-vs-orange/30 text-vs-orange rounded-lg text-xs font-bold hover:bg-vs-orange/20 transition-colors"
+                      onClick={() => setZoneCamera(cam)}
+                      title="Manage Safety Zones"
+                    >
+                      <Map size={14} />
+                      Manage Safety Zones
+                    </button>
                     <button
                       className="p-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
                       onClick={() => handleDeleteCamera(cam.id)}
@@ -417,15 +603,6 @@ const CameraManagement = () => {
                       <Trash2 size={14} />
                     </button>
                   </div>
-
-                  <button
-                    className="w-full flex items-center justify-center gap-2 py-2 bg-vs-orange/10 border border-vs-orange/30 text-vs-orange rounded-lg text-xs font-bold hover:bg-vs-orange/20 transition-colors"
-                    onClick={() => setZoneCamera(cam)}
-                    title="Manage Safety Zones"
-                  >
-                    <Map size={14} />
-                    Manage Safety Zones
-                  </button>
 
                   {/* Stream state badge (below controls) */}
                   <div className="flex items-center justify-between text-[10px] text-zinc-600">

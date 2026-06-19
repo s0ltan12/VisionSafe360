@@ -110,10 +110,13 @@ class HazardAnalyzer:
     def __init__(
         self,
         fall_enabled: bool = True,
+        cooldown_sec: Optional[float] = None,
         **kwargs,
     ) -> None:
         self.fall_enabled = fall_enabled
         self._cfg = self._validated_config()
+        if cooldown_sec is not None:
+            self._cfg["cooldown_sec"] = _non_negative(float(cooldown_sec), self._cfg["cooldown_sec"])
 
         # Fall state machines per track_id
         self._fall_states: Dict[int, PersonFallState] = {}

@@ -73,6 +73,8 @@ _HAZARD_TYPE_MAP: dict[str, HazardTypeEnum] = {
     "intrusion":                  HazardTypeEnum.Intrusion,
 }
 
+_LEGACY_ZONE_TRANSITION_EVENTS = {"zone_enter", "zone_exit", "zone_crossed"}
+
 
 # ── Result type ───────────────────────────────────────────────────────
 
@@ -122,6 +124,48 @@ def _map_hazard_type(event_type: str) -> HazardTypeEnum:
     if "ergo" in lower or "posture" in lower:
         return HazardTypeEnum.Ergonomics
     return HazardTypeEnum.Intrusion
+
+
+def _is_legacy_zone_transition(payload: HazardEventPayload, event_type: str) -> bool:
+    lowered = str(event_type or "").lower()
+    if lowered in _LEGACY_ZONE_TRANSITION_EVENTS:
+        return True
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    zone_event_type = str(metadata.get("zone_event_type") or "").lower()
+    return lowered.startswith("zone_") and zone_event_type in {"exit", "cross"}
+
+
+def _zone_display_title(payload: HazardEventPayload, event_type: str) -> Optional[str]:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    zone_name = (
+        metadata.get("safety_zone_name")
+        or metadata.get("zone")
+        or payload.zone
+        or "Safety Zone"
+    )
+    object_class = str(metadata.get("object_class") or "").lower()
+    event_type = str(event_type or "").lower()
+    if event_type == "zone_person_in_danger":
+        return f"Worker in danger zone: {zone_name}"
+    if event_type == "zone_person_entered":
+        return f"Worker in danger zone: {zone_name}"
+    if event_type == "zone_person_in_forklift_lane":
+        return f"Worker in forklift lane: {zone_name}"
+    if event_type == "zone_forklift_in_pedestrian_zone":
+        return f"Forklift in pedestrian walkway: {zone_name}"
+    if event_type == "zone_forklift_entered_pedestrian_zone":
+        return f"Forklift in pedestrian walkway: {zone_name}"
+    if event_type == "zone_unauthorized_presence":
+        label = "Worker" if object_class == "person" else (object_class.title() if object_class else "Object")
+        return f"{label} in restricted zone: {zone_name}"
+    if event_type == "zone_unauthorized_entry":
+        label = "Worker" if object_class == "person" else (object_class.title() if object_class else "Object")
+        return f"{label} in restricted zone: {zone_name}"
+    if event_type == "zone_occupancy_threshold_exceeded":
+        return f"Zone occupancy threshold exceeded: {zone_name}"
+    if event_type == "zone_dwell_time_exceeded":
+        return f"Time inside zone exceeded limit: {zone_name}"
+    return None
 
 
 def _normalize_risk_level(raw: Optional[str], severity: SeverityEnum) -> RiskLevelEnum:
@@ -203,6 +247,41 @@ def _extract_confidence(payload: HazardEventPayload) -> Optional[float]:
     return None
 
 
+def _metadata_list(metadata: dict, *keys: str) -> list[str]:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, tuple):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value]
+    return []
+
+
+def _ppe_display_title(payload: HazardEventPayload, event_type: str) -> Optional[str]:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    explicit = metadata.get("display_title") or metadata.get("alert_title")
+    if explicit:
+        return str(explicit)
+    items = _metadata_list(metadata, "missing_ppe_items", "ppe_items")
+    if not items:
+        item = metadata.get("ppe_item")
+        if item:
+            items = [str(item)]
+    lowered = str(event_type or "").lower()
+    if not items and "ppe_missing_" in lowered:
+        item = lowered.split("ppe_missing_", 1)[-1]
+        if item:
+            items = [item]
+    if items:
+        label = ", ".join(item.replace("_", " ").strip() for item in items)
+        return f"PPE missing {label}"
+    if _map_hazard_type(event_type) == HazardTypeEnum.PPE:
+        return "PPE missing"
+    return None
+
+
 def _is_composite_payload(payload: HazardEventPayload) -> bool:
     metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
     return bool(metadata.get("composite") or metadata.get("correlation_id"))
@@ -220,6 +299,25 @@ def _composite_incident_id(correlation_id: object) -> str:
 def _proximity_incident_id(operational_case_id: object) -> str:
     digest = hashlib.sha1(str(operational_case_id).encode("utf-8")).hexdigest()[:16]
     return f"INC-PROX-{digest}"
+
+
+def _ppe_incident_id(*, camera_id: Optional[str], worker_key: object, timestamp: float) -> str:
+    digest = hashlib.sha1(
+        f"{camera_id or 'unknown'}:{worker_key or 'unknown'}:{int(timestamp)}:PPE".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"INC-PPE-{digest}"
+
+
+def _ppe_worker_key(payload: HazardEventPayload) -> object:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    return (
+        metadata.get("worker_track_id")
+        or metadata.get("track_id")
+        or payload.track_id
+        or metadata.get("worker_id")
+        or payload.worker_id
+        or "unknown"
+    )
 
 
 def _parent_proximity_incident_id(payload: HazardEventPayload) -> Optional[str]:
@@ -327,6 +425,15 @@ def _source_incident_ids(payload: HazardEventPayload) -> list[str]:
             continue
         frame_number = source.get("frame_number") or 0
         track_id = source.get("track_id")
+        source_event_type = str(source.get("event_type") or "")
+        if _map_hazard_type(source_event_type) == HazardTypeEnum.PPE:
+            ids.append(
+                _ppe_incident_id(
+                    camera_id=payload.camera_id,
+                    worker_key=source.get("worker_track_id") or track_id or "unknown",
+                    timestamp=float(ts),
+                )
+            )
         track_part = f"T{track_id}" if track_id is not None else "TNA"
         ids.append(f"INC-{ts}-{frame_number}-{track_part}")
     return list(dict.fromkeys(ids))
@@ -562,6 +669,15 @@ def _normalise_payload(payload: HazardEventPayload) -> _NormalisedEvent:
             event_type = "forklift_proximity"
         if event_type == "forklift_overspeed":
             classification = "Forklift Overspeed"
+        ppe_title = _ppe_display_title(payload, event_type)
+        if ppe_title:
+            classification = ppe_title
+            if not payload.root_cause:
+                description = ppe_title
+        zone_title = _zone_display_title(payload, event_type)
+        if zone_title:
+            classification = zone_title
+            description = zone_title
     else:
         ts = payload.timestamp or time.time()
         track_part = f"T{payload.track_id}" if payload.track_id is not None else "TNA"
@@ -574,11 +690,25 @@ def _normalise_payload(payload: HazardEventPayload) -> _NormalisedEvent:
         event_type = (payload.event_type or "hazard").lower()
         if event_type == "forklift_overspeed":
             classification = "Forklift Overspeed"
+        ppe_title = _ppe_display_title(payload, event_type)
+        if ppe_title:
+            classification = ppe_title
+            description = payload.description or f"{ppe_title} track={payload.track_id or 'unknown'}"
+        zone_title = _zone_display_title(payload, event_type)
+        if zone_title:
+            classification = zone_title
+            description = zone_title
 
     if correlation_id:
         incident_id = _composite_incident_id(correlation_id)
     elif operational_case_id and _is_operational_proximity_payload(payload):
         incident_id = _proximity_incident_id(operational_case_id)
+    elif _map_hazard_type(event_type) == HazardTypeEnum.PPE:
+        incident_id = _ppe_incident_id(
+            camera_id=camera_id,
+            worker_key=_ppe_worker_key(payload),
+            timestamp=ts,
+        )
 
     return _NormalisedEvent(
         ts=ts,
@@ -599,6 +729,32 @@ def _severity_rank(severity: SeverityEnum) -> int:
         SeverityEnum.High: 3,
         SeverityEnum.Critical: 4,
     }.get(severity, 0)
+
+
+def _hazard_notification_idempotency_key(
+    payload: HazardEventPayload,
+    *,
+    ev: _NormalisedEvent,
+    camera_id: str,
+    worker_id: str,
+) -> str:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    person_key = (
+        metadata.get("worker_track_id")
+        or metadata.get("track_id")
+        or payload.track_id
+        or worker_id
+        or "unknown"
+    )
+    return ":".join(
+        [
+            "incident_created",
+            str(camera_id or "unknown"),
+            _map_hazard_type(ev.event_type).value,
+            str(person_key),
+            str(int(ev.ts)),
+        ]
+    )
 
 
 def _proximity_timeline_action(lifecycle: str, severity_increased: bool, severity_decreased: bool) -> str:
@@ -832,6 +988,15 @@ class IngestService:
     @staticmethod
     def process(db: Session, payload: HazardEventPayload) -> IngestResult:
         ev = _normalise_payload(payload)
+        if _is_legacy_zone_transition(payload, ev.event_type):
+            logger.info(
+                "Ignored legacy safety-zone transition event: type=%s camera=%s frame=%s",
+                ev.event_type,
+                ev.camera_id,
+                payload.frame_number,
+            )
+            return IngestResult(status="ignored")
+
         location = _resolve_location(db, payload)
         payload_metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
         camera_safety_zone = _resolve_camera_safety_zone(db, payload)
@@ -988,7 +1153,12 @@ class IngestService:
             idempotency_key=(
                 f"{event_metadata.get('operational_case_id')}:incident_created"
                 if _is_operational_proximity_payload(payload) and event_metadata.get("operational_case_id")
-                else None
+                else _hazard_notification_idempotency_key(
+                    payload,
+                    ev=ev,
+                    camera_id=camera_id,
+                    worker_id=worker_id,
+                )
             ),
         )
 
@@ -1024,6 +1194,7 @@ class IngestService:
             frame_height=event_frame_height,
             evidence_kind=evidence_kind,
             confidence=_extract_confidence(payload),
+            event_metadata=event_metadata,
         )
         db.add(alert)
         db.flush()
@@ -1091,6 +1262,7 @@ class IngestService:
                 "track_id": event_track_id,
                 "frame_number": event_frame_number,
                 "event_frame": event_frame_path,
+                "safety_zone_snapshot": event_metadata.get("safety_zone_snapshot"),
             },
         )
 
