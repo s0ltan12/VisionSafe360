@@ -1,0 +1,27 @@
+# Dart and Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+pubspec.lock
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Xcode
+ios/Flutter/.last_build_id
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# Logs and local config
+*.log
+*.local
+.env
+.env.*
+
+# OS/editor files
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
