@@ -1,0 +1,62 @@
+{
+  "meta": {
+    "name": "VisionSafe 360 Design System",
+    "version": "1.0.0"
+  },
+  "colors": {
+    "primary": {
+      "orange": { "value": "#FF6A00", "name": "Safety Orange" },
+      "lightOrange": { "value": "#FF8A3A", "name": "Highlight Orange" }
+    },
+    "neutral": {
+      "white": { "value": "#FFFFFF" },
+      "black": { "value": "#000000" },
+      "lightGray": { "value": "#F4F4F4", "name": "Light Background" },
+      "darkGray": { "value": "#1E1E1E", "name": "Dark Text" }
+    },
+    "darkMode": {
+      "background": { "value": "#0A0A0A", "name": "Tech Black Bg" },
+      "card": { "value": "#141414", "name": "Dark Card Surface" },
+      "border": { "value": "#262626", "name": "Dark Border" },
+      "input": { "value": "#1F1F1F", "name": "Dark Input Field" }
+    },
+    "status": {
+      "success": { "value": "#16A34A", "name": "Green/Safe" },
+      "warning": { "value": "#CA8A04", "name": "Yellow/Caution" },
+      "danger": { "value": "#DC2626", "name": "Red/Critical" }
+    }
+  },
+  "effects": {
+    "shadows": {
+      "soft": {
+        "value": "0px 4px 20px rgba(0, 0, 0, 0.05)",
+        "description": "Used for cards in light mode"
+      },
+      "glow": {
+        "value": "0px 0px 15px rgba(255, 106, 0, 0.3)",
+        "description": "Used for primary buttons and logo container"
+      }
+    }
+  },
+  "typography": {
+    "fontFamily": "Inter, system-ui, sans-serif",
+    "weights": {
+      "regular": 400,
+      "medium": 500,
+      "bold": 700
+    },
+    "sizes": {
+      "xs": "10px",
+      "sm": "14px",
+      "base": "16px",
+      "lg": "18px",
+      "xl": "20px",
+      "2xl": "24px"
+    }
+  },
+  "borderRadius": {
+    "lg": "12px",
+    "xl": "16px",
+    "2xl": "18px"
+  }
+}

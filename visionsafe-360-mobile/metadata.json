@@ -1,0 +1,9 @@
+{
+  "name": "Copy of VisionSafe 360 Mobile",
+  "description": "Enterprise-grade mobile UI for AI-powered industrial safety monitoring. Features real-time alerts, live camera feeds with AI overlays, and incident management.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
