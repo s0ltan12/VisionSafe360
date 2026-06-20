@@ -20,17 +20,25 @@ class AppProviders extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InheritedNotifier<AuthProvider>(
+    return AppInheritedNotifier<AuthProvider>(
       notifier: authProvider,
-      child: InheritedNotifier<IncidentProvider>(
+      child: AppInheritedNotifier<IncidentProvider>(
         notifier: incidentProvider,
-        child: InheritedNotifier<SettingsProvider>(
+        child: AppInheritedNotifier<SettingsProvider>(
           notifier: settingsProvider,
           child: child,
         ),
       ),
     );
   }
+}
+
+class AppInheritedNotifier<T extends Listenable> extends InheritedNotifier<T> {
+  const AppInheritedNotifier({
+    super.key,
+    required super.notifier,
+    required super.child,
+  });
 }
 
 class AppProviderScope extends StatefulWidget {
@@ -74,21 +82,21 @@ class _AppProviderScopeState extends State<AppProviderScope> {
 extension ProviderLookup on BuildContext {
   AuthProvider get authProvider {
     final provider =
-        dependOnInheritedWidgetOfExactType<InheritedNotifier<AuthProvider>>();
+        dependOnInheritedWidgetOfExactType<AppInheritedNotifier<AuthProvider>>();
     assert(provider?.notifier != null, 'AuthProvider not found in widget tree.');
     return provider!.notifier!;
   }
 
   IncidentProvider get incidentProvider {
     final provider =
-        dependOnInheritedWidgetOfExactType<InheritedNotifier<IncidentProvider>>();
+        dependOnInheritedWidgetOfExactType<AppInheritedNotifier<IncidentProvider>>();
     assert(provider?.notifier != null, 'IncidentProvider not found in widget tree.');
     return provider!.notifier!;
   }
 
   SettingsProvider get settingsProvider {
     final provider =
-        dependOnInheritedWidgetOfExactType<InheritedNotifier<SettingsProvider>>();
+        dependOnInheritedWidgetOfExactType<AppInheritedNotifier<SettingsProvider>>();
     assert(provider?.notifier != null, 'SettingsProvider not found in widget tree.');
     return provider!.notifier!;
   }

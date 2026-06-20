@@ -69,7 +69,7 @@ class IncidentProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void showResolveSheet() {
+  void openResolveSheet() {
     _showResolveSheet = true;
     notifyListeners();
   }

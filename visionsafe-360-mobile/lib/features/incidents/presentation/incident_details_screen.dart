@@ -312,7 +312,7 @@ class IncidentDetailsScreen extends StatelessWidget {
     if (alert.status == AlertStatus.acknowledged) {
       return primaryButton(
         copy['resolve']!,
-        incidents.showResolveSheet,
+        incidents.openResolveSheet,
         icon: Icons.check_circle_outline,
         color: AppColors.success,
         foreground: Colors.white,
