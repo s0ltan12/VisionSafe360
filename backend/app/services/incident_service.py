@@ -12,6 +12,7 @@ from ..schemas import IncidentCreate, IncidentUpdate
 from .incident_command_service import ACTIVE_STATUSES, HISTORY_STATUSES, IncidentCommandService
 from .incident_timeline_service import IncidentTimelineService
 from .notification_dispatch_service import NotificationDispatchService
+from .realtime_event_service import publish_incident_change, publish_incident_deleted
 
 
 def _status_value(value) -> str:
@@ -73,6 +74,7 @@ class IncidentService:
         )
         db.commit()
         db.refresh(incident)
+        publish_incident_change(incident, "incident_created")
         return incident
 
     @staticmethod
@@ -90,6 +92,7 @@ class IncidentService:
             setattr(incident, field, value)
         db.commit()
         db.refresh(incident)
+        publish_incident_change(incident, "incident_updated")
         return incident
 
     @staticmethod
@@ -189,6 +192,8 @@ class IncidentService:
             )
         if stale:
             db.commit()
+            for incident in stale:
+                publish_incident_change(incident, "incident_status_changed")
         return len(stale)
 
     @staticmethod
@@ -198,4 +203,5 @@ class IncidentService:
             return False
         db.delete(incident)
         db.commit()
+        publish_incident_deleted(incident_id)
         return True

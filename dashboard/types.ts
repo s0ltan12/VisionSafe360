@@ -376,6 +376,5 @@ export enum Page {
   REPORTS = 'Analytics',
   CAMERAS = 'Cameras',
   HEALTH = 'System Health',
-  USERS = 'Users',
-  CONFIGURATION = 'Configuration'
+  USERS = 'Users'
 }

@@ -14,7 +14,6 @@ import {
   Cpu,
   UserCheck,
   X,
-  Settings,
   Volume2,
   VolumeX
 } from 'lucide-react';
@@ -40,7 +39,6 @@ const UserManagement = lazy(() => import('./components/UserManagement'));
 const Incidents = lazy(() => import('./components/Incidents'));
 const Ergonomics = lazy(() => import('./components/Ergonomics'));
 const SystemHealth = lazy(() => import('./components/SystemHealth'));
-const Configuration = lazy(() => import('./components/Configuration'));
 const Login = lazy(() => import('./components/Login'));
 
 const SidebarItem = ({ 
@@ -306,7 +304,6 @@ const AppContent = () => {
       case Page.CAMERAS: return <CameraManagement />;
       case Page.HEALTH: return <SystemHealth />;
       case Page.USERS: return <UserManagement />;
-      case Page.CONFIGURATION: return <Configuration />;
       default: return <Dashboard onViewAlerts={() => setCurrentPage(Page.ALERTS)} />;
     }
   };
@@ -358,7 +355,6 @@ const AppContent = () => {
           <SidebarItem icon={Activity} label={t('cameras')} isActive={currentPage === Page.CAMERAS} onClick={() => handlePageChange(Page.CAMERAS)} />
           <SidebarItem icon={Cpu} label={t('health')} isActive={currentPage === Page.HEALTH} onClick={() => handlePageChange(Page.HEALTH)} />
           <SidebarItem icon={Users} label={t('users')} isActive={currentPage === Page.USERS} onClick={() => handlePageChange(Page.USERS)} />
-          <SidebarItem icon={Settings} label={t('configuration')} isActive={currentPage === Page.CONFIGURATION} onClick={() => handlePageChange(Page.CONFIGURATION)} />
         </div>
       )}
     </>

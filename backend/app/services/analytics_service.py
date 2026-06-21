@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..models import Alert, Camera, ErgonomicRecord, HazardTypeEnum, Incident, SeverityEnum, StatusEnum, User
+from ..models import Alert, Camera, ErgonomicRecord, HazardTypeEnum, Incident, IncidentStatusEnum, SeverityEnum, StatusEnum, User
 from .sla_service import SLAService
 
 
@@ -20,6 +20,9 @@ class AnalyticsService:
         total_cameras = db.query(Camera).count()
         online_cameras = db.query(Camera).filter(Camera.status == "Online").count()
         total_incidents = db.query(Incident).count()
+        active_incidents = db.query(Incident).filter(
+            Incident.status.in_([IncidentStatusEnum.New, IncidentStatusEnum.Validating, IncidentStatusEnum.Active, IncidentStatusEnum.Acknowledged])
+        ).count()
         total_users = db.query(User).count()
         falls_detected = db.query(Alert).filter(Alert.type == HazardTypeEnum.Fall).count()
         now = datetime.now(timezone.utc)
@@ -52,6 +55,7 @@ class AnalyticsService:
             "online_cameras": online_cameras,
             "offline_cameras": total_cameras - online_cameras,
             "total_incidents": total_incidents,
+            "active_incidents": active_incidents,
             "total_users": total_users,
             "falls_detected": falls_detected,
             "safety_score": safety_score,

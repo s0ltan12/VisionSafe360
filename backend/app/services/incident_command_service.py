@@ -10,6 +10,7 @@ from ..models import Alert, Incident, IncidentStatusEnum, SeverityEnum, StatusEn
 from .alert_service import AlertService
 from .incident_timeline_service import IncidentTimelineService
 from .notification_dispatch_service import NotificationDispatchService
+from .realtime_event_service import publish_incident_change
 
 
 ACTIVE_STATUSES = {
@@ -138,6 +139,7 @@ class IncidentCommandService:
         if commit:
             db.commit()
             db.refresh(incident)
+            publish_incident_change(incident, "incident_status_changed")
         return incident
 
     @staticmethod
@@ -267,6 +269,7 @@ class IncidentCommandService:
         )
         db.commit()
         db.refresh(incident)
+        publish_incident_change(incident, "incident_escalated")
         return incident
 
     @staticmethod

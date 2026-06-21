@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Alert, AlertEvent, User
 from ..schemas import AlertCreate, AlertUpdate
+from .realtime_event_service import publish_alert_change, publish_alert_deleted
 
 
 def _status_value(value) -> str:
@@ -47,6 +48,7 @@ class AlertService:
         )
         db.commit()
         db.refresh(alert)
+        publish_alert_change(alert, "alert_created")
         return alert
 
     @staticmethod
@@ -76,6 +78,7 @@ class AlertService:
 
         db.commit()
         db.refresh(alert)
+        publish_alert_change(alert, "alert_updated")
         return alert
 
     @staticmethod
@@ -121,4 +124,5 @@ class AlertService:
             return False
         db.delete(alert)
         db.commit()
+        publish_alert_deleted(alert_id)
         return True

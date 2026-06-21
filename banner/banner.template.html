@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --orange:#FF6A00; --orange2:#FF8C32; --orange3:#FFB066;
+    --bg:#070707; --card:#121214; --border:#262626; --border2:#34270f;
+    --text:#ECECEC; --muted:#9CA3AF; --dim:#6B7280;
+    --W:1587px; --H:2245px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:#000;}
+  .page{
+    position:relative; width:var(--W); height:var(--H);
+    background:
+      radial-gradient(1200px 900px at 88% -6%, rgba(255,106,0,0.16), transparent 60%),
+      radial-gradient(1100px 1000px at -8% 18%, rgba(255,140,50,0.07), transparent 55%),
+      radial-gradient(1400px 1200px at 50% 116%, rgba(255,106,0,0.10), transparent 60%),
+      linear-gradient(180deg,#070707 0%, #0B0B0D 45%, #070708 100%);
+    color:var(--text); font-family:'Inter','Segoe UI',sans-serif;
+    overflow:hidden; padding:64px 64px 54px; display:flex; flex-direction:column;
+  }
+  .page::before{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(255,106,0,0.045) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,106,0,0.045) 1px,transparent 1px);
+    background-size:74px 74px;
+    -webkit-mask-image:radial-gradient(1500px 1400px at 50% 35%, #000 30%, transparent 78%);
+    mask-image:radial-gradient(1500px 1400px at 50% 35%, #000 30%, transparent 78%);
+  }
+  .page::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    box-shadow:inset 0 0 0 2px rgba(255,106,0,0.32), inset 0 0 0 10px rgba(0,0,0,0.6), inset 0 0 90px 30px rgba(0,0,0,0.85);
+  }
+  .corner{position:absolute;width:54px;height:54px;border:3px solid var(--orange);z-index:6;opacity:.9;}
+  .corner.tl{top:30px;left:30px;border-right:none;border-bottom:none;}
+  .corner.tr{top:30px;right:30px;border-left:none;border-bottom:none;}
+  .corner.bl{bottom:30px;left:30px;border-right:none;border-top:none;}
+  .corner.br{bottom:30px;right:30px;border-left:none;border-top:none;}
+  .layer{position:relative;z-index:5;display:flex;flex-direction:column;height:100%;}
+
+  .top{display:flex;align-items:center;justify-content:space-between;gap:24px;}
+  .uni{display:flex;align-items:center;gap:20px;}
+  .uni img{height:104px;width:auto;filter:drop-shadow(0 6px 18px rgba(0,0,0,.6));}
+  .uni .u1{font-size:23px;font-weight:700;letter-spacing:.04em;color:#fff;line-height:1.16;}
+  .uni .u2{font-size:17px;font-weight:600;color:var(--orange2);letter-spacing:.06em;text-transform:uppercase;}
+  .uni .u3{font-size:13.5px;color:var(--muted);letter-spacing:.22em;text-transform:uppercase;margin-top:3px;}
+  .yearchip{font-family:'JetBrains Mono',monospace;font-size:14px;letter-spacing:.12em;
+    color:var(--orange2);border:1.5px solid var(--border2);background:rgba(255,106,0,.06);
+    padding:11px 18px;border-radius:10px;font-weight:500;white-space:nowrap;}
+  .yearchip b{color:#fff;font-weight:700;}
+
+  .hero{display:flex;align-items:center;gap:46px;margin-top:40px;}
+  .hero .logo{flex:0 0 auto;width:300px;height:300px;position:relative;display:flex;align-items:center;justify-content:center;}
+  .hero .logo .halo{position:absolute;inset:-6%;border-radius:50%;background:radial-gradient(circle,rgba(255,106,0,.28),transparent 62%);filter:blur(8px);}
+  .hero .logo img{width:100%;height:100%;position:relative;filter:drop-shadow(0 0 34px rgba(255,106,0,.45));}
+  .hero .htext{flex:1 1 auto;min-width:0;}
+  .eyebrow{display:inline-flex;align-items:center;gap:12px;font-family:'JetBrains Mono',monospace;
+    font-size:15px;letter-spacing:.34em;text-transform:uppercase;color:var(--orange);font-weight:500;margin-bottom:14px;}
+  .eyebrow .dot{width:9px;height:9px;border-radius:50%;background:var(--orange);box-shadow:0 0 12px 3px rgba(255,106,0,.7);}
+  .eyebrow .ln{width:60px;height:1.5px;background:linear-gradient(90deg,var(--orange),transparent);}
+  .brand{font-family:'Space Grotesk',sans-serif;font-weight:700;line-height:.96;font-size:118px;letter-spacing:-.02em;color:#fff;}
+  .brand .o{background:linear-gradient(120deg,var(--orange) 0%,var(--orange2) 55%,var(--orange3) 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;text-shadow:0 0 40px rgba(255,106,0,.35);}
+  .tag{font-size:25px;font-weight:600;color:#fff;margin-top:18px;line-height:1.28;letter-spacing:-.01em;}
+  .tag .hl{color:var(--orange2);}
+  .subtag{font-size:16.5px;color:var(--muted);margin-top:12px;line-height:1.5;max-width:880px;}
+
+  .pills{display:flex;flex-wrap:wrap;gap:11px;margin-top:22px;}
+  .pill{display:inline-flex;align-items:center;gap:9px;font-size:14px;font-weight:600;color:#FFD9B8;
+    background:linear-gradient(180deg,rgba(255,106,0,.14),rgba(255,106,0,.05));border:1px solid var(--border2);
+    padding:9px 15px;border-radius:999px;}
+  .pill svg{width:16px;height:16px;}
+  .pill svg *{stroke:var(--orange2);}
+
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:34px;}
+  .metric{position:relative;background:linear-gradient(180deg,var(--card),#0E0E10);border:1px solid var(--border);
+    border-radius:16px;padding:20px 22px;overflow:hidden;}
+  .metric::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(180deg,var(--orange),var(--orange2));}
+  .metric .mv{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:40px;color:#fff;line-height:1;}
+  .metric .mv .u{font-size:21px;color:var(--orange2);font-weight:600;}
+  .metric .ml{font-size:13.5px;color:var(--muted);margin-top:8px;line-height:1.35;font-weight:500;}
+
+  .body{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:30px;flex:1 1 auto;}
+  .col{display:flex;flex-direction:column;gap:22px;}
+  .card{position:relative;background:linear-gradient(180deg,var(--card),#0D0D0F);border:1px solid var(--border);border-radius:18px;padding:26px 28px;}
+  .chead{display:flex;align-items:center;gap:14px;margin-bottom:14px;}
+  .cnum{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#070707;
+    background:linear-gradient(135deg,var(--orange),var(--orange2));width:34px;height:34px;border-radius:9px;
+    display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(255,106,0,.35);}
+  .ctitle{font-size:21px;font-weight:700;color:#fff;}
+  .ctitle .s{display:block;font-size:12.5px;font-weight:600;color:var(--orange2);letter-spacing:.18em;text-transform:uppercase;margin-top:1px;}
+  .card p{font-size:15px;line-height:1.6;color:#C9CDD3;}
+  .card p .hl{color:#fff;font-weight:600;}
+  .card p .or{color:var(--orange2);font-weight:600;}
+
+  .feat{display:flex;gap:13px;align-items:flex-start;margin-top:13px;}
+  .feat .fi{flex:0 0 auto;width:38px;height:38px;border-radius:10px;background:rgba(255,106,0,.08);
+    border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;}
+  .feat .fi svg{width:20px;height:20px;}
+  .feat .fi svg *{stroke:var(--orange2);}
+  .feat .ft{font-size:15px;font-weight:700;color:#fff;line-height:1.2;}
+  .feat .fd{font-size:13.5px;color:var(--muted);line-height:1.45;margin-top:3px;}
+
+  .who{display:flex;flex-wrap:wrap;gap:9px;margin-top:6px;}
+  .who span{font-size:13px;font-weight:600;color:#D7DBE0;background:#1A1A1C;border:1px solid var(--border);border-radius:8px;padding:8px 12px;}
+
+  .credits{display:grid;grid-template-columns:1.55fr 1fr;gap:22px;}
+  .lbl{font-size:12.5px;font-weight:700;color:var(--orange2);letter-spacing:.2em;text-transform:uppercase;
+    margin-bottom:12px;display:flex;align-items:center;gap:9px;}
+  .lbl svg{width:16px;height:16px;}
+  .lbl svg *{stroke:var(--orange2);}
+  .team-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;}
+  .team-grid .m{display:flex;align-items:center;gap:10px;font-size:14.5px;color:#D7DBE0;}
+  .team-grid .m .n{font-family:'JetBrains Mono',monospace;color:var(--orange);font-size:12px;font-weight:700;}
+  .team-grid .m .d{flex:1;border-bottom:1px dotted #3a3a3a;height:1px;margin-top:8px;}
+  .sup .srow{font-size:14.5px;color:#D7DBE0;display:flex;align-items:baseline;gap:8px;margin-bottom:9px;}
+  .sup .srow .k{color:var(--muted);font-size:13px;min-width:64px;}
+  .sup .srow .v{flex:1;border-bottom:1px dotted #3a3a3a;}
+
+  .foot{display:flex;align-items:center;justify-content:space-between;margin-top:22px;padding-top:18px;border-top:1px solid var(--border);}
+  .foot .fl{display:flex;align-items:center;gap:14px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--dim);letter-spacing:.08em;}
+  .foot .fl .b{color:var(--orange2);font-weight:700;}
+  .foot .fr{font-size:14px;color:var(--muted);}
+  .foot .fr b{color:#fff;}
+</style>
+</head>
+<body>
+<div class="page">
+  <span class="corner tl"></span><span class="corner tr"></span>
+  <span class="corner bl"></span><span class="corner br"></span>
+  <div class="layer">
+    <div class="top">
+      <div class="uni">
+        <img src="__ERU_LOGO__" alt="Egyptian Russian University" />
+        <div>
+          <div class="u1">Egyptian Russian University</div>
+          <div class="u2">Faculty of Artificial Intelligence</div>
+          <div class="u3">Graduation Project</div>
+        </div>
+      </div>
+      <div class="yearchip">ACADEMIC YEAR&nbsp;&nbsp;<b>2025 / 2026</b></div>
+    </div>
+
+    <div class="hero">
+      <div class="logo">
+        <span class="halo"></span>
+        <img src="__VS_LOGO__" alt="VisionSafe 360 logo" />
+      </div>
+      <div class="htext">
+        <div class="eyebrow"><span class="dot"></span>EDGE-AI INDUSTRIAL SAFETY<span class="ln"></span></div>
+        <div class="brand">VISIONSAFE <span class="o">360</span></div>
+        <div class="tag">Turning the cameras you <span class="hl">already own</span> into an <span class="hl">active line of defense</span> &mdash; stopping the accident <span class="hl">before</span> it happens.</div>
+        <div class="subtag">The first unified safety ecosystem that fuses PPE compliance, forklift-worker proximity, fall detection, and ergonomic risk into one real-time platform &mdash; all running on-site at the edge.</div>
+        <div class="pills">
+          <span class="pill"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-4z" stroke-width="1.8"/></svg>PPE Compliance</span>
+          <span class="pill"><svg viewBox="0 0 24 24" fill="none"><path d="M3 13h11l2-4h4v8h-2M6 17a2 2 0 100-4 2 2 0 000 4zm12 0a2 2 0 100-4 2 2 0 000 4z" stroke-width="1.8"/></svg>Forklift Proximity</span>
+          <span class="pill"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5a2 2 0 100-4 2 2 0 000 4zM7 21l3-7 4 2 1 5M10 14l-2-5 6-1 3 4" stroke-width="1.8"/></svg>Fall Detection</span>
+          <span class="pill"><svg viewBox="0 0 24 24" fill="none"><path d="M9 3a2 2 0 104 0 2 2 0 00-4 0zM8 8h6l2 6-3 1-1 6M9 9l-3 6" stroke-width="1.8"/></svg>Ergonomics &middot; RULA/REBA</span>
+          <span class="pill"><svg viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2" stroke-width="1.8"/><path d="M11 18h2" stroke-width="1.8"/></svg>Mobile Alerts</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric"><div class="mv">4-in-1</div><div class="ml">Hazard models unified in a single platform</div></div>
+      <div class="metric"><div class="mv">0<span class="u"> cloud</span></div><div class="ml">Video never leaves the facility &mdash; full edge privacy</div></div>
+      <div class="metric"><div class="mv">~3<span class="u">s</span></div><div class="ml">From hazard to supervisor's phone</div></div>
+      <div class="metric"><div class="mv">2<span class="u"> langs</span></div><div class="ml">Bilingual EN / AR &middot; WCAG accessible</div></div>
+    </div>
+
+    <div class="body">
+      <div class="col">
+        <div class="card">
+          <div class="chead"><div class="cnum">01</div><div class="ctitle">The Problem &amp; Our Goal<span class="s">Why it matters</span></div></div>
+          <p>In industry, <span class="hl">the cost of being late is measured in lives.</span> Most workplaces still rely on cameras that only <span class="or">record</span> what already happened. VisionSafe 360 makes that same infrastructure <span class="or">recognize danger as it unfolds</span> and intervene before the accident occurs &mdash; replacing fragmented, reactive tools with continuous, evidence-driven prevention.</p>
+        </div>
+        <div class="card">
+          <div class="chead"><div class="cnum">02</div><div class="ctitle">Value &amp; Feasibility<span class="s">Built for adoption</span></div></div>
+          <p><span class="hl">Nothing to replace.</span> It runs on the CCTV a site already operates. All analysis happens <span class="or">locally at the edge</span> &mdash; no cloud-upload costs, data sovereignty satisfied, real-time response independent of the network. Scales linearly per camera, from one device to a multi-site enterprise, aligned with <span class="or">OSHA, NIOSH &amp; ISO 45001</span>.</p>
+        </div>
+        <div class="card">
+          <div class="chead"><div class="cnum">03</div><div class="ctitle">How It Works<span class="s">Four cohesive layers</span></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke-width="1.8"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-width="1.8"/></svg></div><div><div class="ft">Unified AI Safety Intelligence</div><div class="fd">PPE, proximity, falls &amp; posture monitored together &mdash; the central technical contribution.</div></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="13" rx="2" stroke-width="1.8"/><path d="M8 21h8M12 17v4" stroke-width="1.8"/></svg></div><div><div class="ft">Real-Time Command Center</div><div class="fd">Multi-camera dashboard, alert triage, safety zones &amp; full incident lifecycle + mobile push.</div></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18" stroke-width="1.8"/><circle cx="12" cy="12" r="3" stroke-width="1.8"/></svg></div><div><div class="ft">Intelligent Decision Support</div><div class="fd">Detections validated before alerting &mdash; eliminating alert fatigue; analytics surface hazard patterns.</div></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12a7 7 0 0114 0M8 12a4 4 0 018 0M3 19h18" stroke-width="1.8"/></svg></div><div><div class="ft">Resilient &amp; Accessible</div><div class="fd">Keeps detecting offline, auto-syncs on reconnect; bilingual EN/AR, fully accessible.</div></div></div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="card">
+          <div class="chead"><div class="cnum">04</div><div class="ctitle">Who Benefits<span class="s">Wherever workers &amp; machines share space</span></div></div>
+          <div class="who">
+            <span>Manufacturing &amp; Assembly</span><span>Warehouses &amp; Logistics</span><span>Construction Sites</span><span>Oil, Gas &amp; Heavy Industry</span><span>Ports &middot; Mining &middot; Quarrying</span><span>HSE &amp; Safety Officers</span><span>Floor Supervisors</span><span>Workers</span><span>Regulators &amp; Insurers</span>
+          </div>
+          <p style="margin-top:14px">The <span class="or">strongest beneficiaries are the workers themselves</span> &mdash; faster emergency response, protection from the most common hazards, and ergonomic intervention before chronic injury.</p>
+        </div>
+        <div class="card">
+          <div class="chead"><div class="cnum">05</div><div class="ctitle">Expected Impact<span class="s">From reactive to preventive</span></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke-width="1.8"/><path d="M12 7v5l3 2" stroke-width="1.8"/></svg></div><div><div class="ft">Operational</div><div class="fd">Response time collapses from minutes/hours to <b style="color:#fff">seconds</b> &mdash; the difference between recovery and tragedy.</div></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" stroke-width="1.8"/></svg></div><div><div class="ft">Financial</div><div class="fd">Turns hidden injury costs &mdash; downtime, penalties, premiums, litigation &mdash; into preventable expense.</div></div></div>
+          <div class="feat"><div class="fi"><svg viewBox="0 0 24 24" fill="none"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" stroke-width="1.8"/></svg></div><div><div class="ft">Organizational &amp; Cultural</div><div class="fd">Every alert logged with evidence &amp; audit trail &mdash; shifting from blame-based to <b style="color:#fff">evidence-based safety</b>.</div></div></div>
+        </div>
+        <div class="card">
+          <div class="credits">
+            <div class="team">
+              <div class="lbl"><svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke-width="1.8"/><path d="M3 20a6 6 0 0112 0M16 6a3 3 0 010 6M21 20a6 6 0 00-4-5.6" stroke-width="1.8"/></svg>Student Team</div>
+              <div class="team-grid">
+                <div class="m"><span class="n">01</span><span class="d"></span></div>
+                <div class="m"><span class="n">02</span><span class="d"></span></div>
+                <div class="m"><span class="n">03</span><span class="d"></span></div>
+                <div class="m"><span class="n">04</span><span class="d"></span></div>
+                <div class="m"><span class="n">05</span><span class="d"></span></div>
+              </div>
+            </div>
+            <div class="sup">
+              <div class="lbl"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="7" r="4" stroke-width="1.8"/><path d="M4 21a8 8 0 0116 0" stroke-width="1.8"/></svg>Supervisor</div>
+              <div class="srow"><span class="k">Name</span><span class="v"></span></div>
+              <div class="srow"><span class="k">Title</span><span class="v"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="fl"><span class="b">&#9700; VISIONSAFE 360</span><span>//</span><span>EDGE-AI &middot; COMPUTER VISION &middot; REAL-TIME ANALYTICS</span></div>
+      <div class="fr"><b>A deployable platform &mdash; not a research prototype.</b></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

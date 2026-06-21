@@ -1053,10 +1053,25 @@ export const ErgonomicsAPI = {
   },
 
   getRecords: async (limit: number = 500): Promise<ErgonomicRecord[]> => {
-    const pageSize = Math.min(Math.max(limit, 1), 200);
-    const data = await request<any>(`/api/ergonomics?limit=${encodeURIComponent(String(pageSize))}`);
-    const items = Array.isArray(data?.items) ? data.items : [];
-    return items.map(toFrontendErgonomicRecord);
+    const target = Math.min(Math.max(limit, 1), 500);
+    const pageSize = Math.min(target, 200);
+    const records: ErgonomicRecord[] = [];
+    let skip = 0;
+
+    while (records.length < target) {
+      const remaining = target - records.length;
+      const currentLimit = Math.min(pageSize, remaining);
+      const data = await request<any>(`/api/ergonomics?skip=${encodeURIComponent(String(skip))}&limit=${encodeURIComponent(String(currentLimit))}`);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      records.push(...items.map(toFrontendErgonomicRecord));
+
+      if (!data?.has_more || items.length === 0) {
+        break;
+      }
+      skip += items.length;
+    }
+
+    return records;
   },
 };
 
@@ -1150,8 +1165,18 @@ export const StatsAPI = {
       online_cameras: number;
       offline_cameras: number;
       total_incidents: number;
+      active_incidents: number;
       total_users: number;
       trends?: Array<{ date: string; count: number }>;
+      avg_resolution_time_seconds?: number;
+      top_dangerous_zones?: Array<{ zone: string; incident_count: number; risk_score: number }>;
+      recurring_hazards?: Array<{ zone: string; classification: string; count: number }>;
+      weekly_summary?: {
+        incidents: number;
+        previous_incidents: number;
+        resolved: number;
+        delta: number;
+      };
     }>('/api/stats'),
 };
 

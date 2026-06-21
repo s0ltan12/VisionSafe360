@@ -13,8 +13,12 @@ from redis.exceptions import RedisError
 
 INCIDENT_CHANNEL = "visionsafe:events:incidents"
 NOTIFICATION_CHANNEL = "visionsafe:events:notifications"
+ERGONOMICS_CHANNEL = "visionsafe:events:ergonomics"
+ANALYTICS_CHANNEL = "visionsafe:events:analytics"
 INCIDENT_STREAM = "visionsafe:streams:incidents"
 NOTIFICATION_STREAM = "visionsafe:streams:notifications"
+ERGONOMICS_STREAM = "visionsafe:streams:ergonomics"
+ANALYTICS_STREAM = "visionsafe:streams:analytics"
 MAX_STREAM_LEN = int(os.getenv("VISIONSAFE_EVENT_STREAM_MAXLEN", "10000"))
 logger = logging.getLogger("visionsafe.event_bus")
 
@@ -76,3 +80,11 @@ def publish_incident(payload: dict[str, Any]) -> None:
 
 def publish_notification(payload: dict[str, Any]) -> None:
     publish_event(NOTIFICATION_CHANNEL, NOTIFICATION_STREAM, payload)
+
+
+def publish_ergonomics(payload: dict[str, Any]) -> None:
+    publish_event(ERGONOMICS_CHANNEL, ERGONOMICS_STREAM, payload)
+
+
+def publish_analytics(payload: dict[str, Any]) -> None:
+    publish_event(ANALYTICS_CHANNEL, ANALYTICS_STREAM, payload)

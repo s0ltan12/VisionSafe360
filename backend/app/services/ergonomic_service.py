@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..models import ErgonomicRecord, RiskLevelEnum
 from ..schemas import ErgonomicRecordCreate
+from .realtime_event_service import publish_ergonomics_record_created
 
 
 class ErgonomicService:
@@ -36,6 +37,7 @@ class ErgonomicService:
         db.add(record)
         db.commit()
         db.refresh(record)
+        publish_ergonomics_record_created(record)
         return record
 
     @staticmethod

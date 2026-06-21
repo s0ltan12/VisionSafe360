@@ -11,6 +11,11 @@ import {
   Download,
   AlertTriangle,
   ImageOff,
+  RefreshCw,
+  SlidersHorizontal,
+  Clock3,
+  Camera,
+  Link2,
 } from 'lucide-react';
 import { Alert as AlertType, AlertEvent, CameraSafetyZone, Severity, Status, HazardType } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -68,6 +73,40 @@ const formatDateTime = (value?: string | null) => {
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 };
+
+const formatShortDateTime = (value?: string | null) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const parseAlertDate = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const isWithinWindow = (value: string | null | undefined, days: number | 'all') => {
+  if (days === 'all') return true;
+  const parsed = parseAlertDate(value);
+  if (!parsed) return false;
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (days - 1));
+  return parsed >= cutoff;
+};
+
+const alertHasEvidence = (alert: AlertType) => Boolean(alert.thumbnail || alert.eventFrame || alert.videoEvidence);
+
+const alertHasLinkedIncident = (alert: AlertType) => Boolean(alert.incidentId);
+
+const csvEscape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
 const formatTimelineAction = (action: string) => {
   const labels: Record<string, string> = {
@@ -429,6 +468,13 @@ const Alerts = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [zoneFilter, setZoneFilter] = useState<string>('all');
+  const [timeWindow, setTimeWindow] = useState<'all' | number>(7);
+  const [evidenceFilter, setEvidenceFilter] = useState<'all' | 'withEvidence' | 'withoutEvidence' | 'linkedIncident'>('all');
+  const [sortMode, setSortMode] = useState<'newest' | 'oldest' | 'severity' | 'confidence'>('newest');
+  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
+  const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [timelineByAlertId, setTimelineByAlertId] = useState<Record<string, AlertEvent[]>>({});
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -437,6 +483,7 @@ const Alerts = ({
 
   const fetchAlerts = useCallback(async () => {
     try {
+      setLoading(true);
       const data = await AlertsAPI.getAll();
       setAlerts(data);
     } catch (e) {
@@ -526,9 +573,17 @@ const Alerts = ({
       result = result.filter(alert =>
         alert.id.toLowerCase().includes(query) ||
         alert.type.toLowerCase().includes(query) ||
-        alert.zone.toLowerCase().includes(query)
+        alert.zone.toLowerCase().includes(query) ||
+        (alert.zoneName || '').toLowerCase().includes(query) ||
+        (alert.areaName || '').toLowerCase().includes(query) ||
+        (alert.cameraId || '').toLowerCase().includes(query) ||
+        (alert.cameraName || '').toLowerCase().includes(query) ||
+        (alert.workerId || '').toLowerCase().includes(query) ||
+        alert.description.toLowerCase().includes(query)
       );
     }
+
+    result = result.filter(alert => isWithinWindow(alert.timestamp, timeWindow));
 
     if (severityFilter !== 'all') {
       result = result.filter(alert => alert.severity.toLowerCase() === severityFilter.toLowerCase());
@@ -538,11 +593,99 @@ const Alerts = ({
       result = result.filter(alert => alert.type.toLowerCase() === typeFilter.toLowerCase());
     }
 
-    return result;
-  }, [alerts, searchQuery, severityFilter, typeFilter]);
+    if (statusFilter !== 'all') {
+      result = result.filter(alert => alert.status.toLowerCase() === statusFilter.toLowerCase());
+    }
+
+    if (zoneFilter !== 'all') {
+      result = result.filter(alert => {
+        const zones = [alert.zone, alert.zoneName, alert.areaName].filter(Boolean).map(value => String(value).toLowerCase());
+        return zones.includes(zoneFilter.toLowerCase());
+      });
+    }
+
+    if (evidenceFilter === 'withEvidence') {
+      result = result.filter(alertHasEvidence);
+    } else if (evidenceFilter === 'withoutEvidence') {
+      result = result.filter(alert => !alertHasEvidence(alert));
+    } else if (evidenceFilter === 'linkedIncident') {
+      result = result.filter(alertHasLinkedIncident);
+    }
+
+    const severityRank: Record<Severity, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+    return [...result].sort((a, b) => {
+      if (sortMode === 'oldest') {
+        return (parseAlertDate(a.timestamp)?.getTime() ?? 0) - (parseAlertDate(b.timestamp)?.getTime() ?? 0);
+      }
+      if (sortMode === 'severity') {
+        return severityRank[b.severity] - severityRank[a.severity] || (parseAlertDate(b.timestamp)?.getTime() ?? 0) - (parseAlertDate(a.timestamp)?.getTime() ?? 0);
+      }
+      if (sortMode === 'confidence') {
+        return Number(b.confidence ?? -1) - Number(a.confidence ?? -1);
+      }
+      return (parseAlertDate(b.timestamp)?.getTime() ?? 0) - (parseAlertDate(a.timestamp)?.getTime() ?? 0);
+    });
+  }, [alerts, evidenceFilter, searchQuery, severityFilter, sortMode, statusFilter, timeWindow, typeFilter, zoneFilter]);
 
   const severityOptions: Severity[] = ['Critical', 'High', 'Medium', 'Low'];
-  const typeOptions: HazardType[] = Array.from(new Set(alerts.map(a => a.type)));
+  const statusOptions: Status[] = Array.from(new Set(alerts.map(a => a.status))).sort() as Status[];
+  const typeOptions: HazardType[] = Array.from(new Set(alerts.map(a => a.type))).sort() as HazardType[];
+  const zoneOptions = Array.from(new Set(alerts.flatMap(alert => [alert.areaName, alert.zoneName, alert.zone]).filter(Boolean) as string[])).sort();
+  const activeAlerts = alerts.filter(alert => ['New', 'Notified', 'Acknowledged', 'In Investigation', 'Active'].includes(alert.status)).length;
+  const criticalAlerts = alerts.filter(alert => alert.severity === 'Critical').length;
+  const linkedIncidents = alerts.filter(alertHasLinkedIncident).length;
+  const alertsWithEvidence = alerts.filter(alertHasEvidence).length;
+  const selectedAlerts = filteredAlerts.filter(alert => selectedAlertIds.includes(alert.id));
+  const allFilteredSelected = filteredAlerts.length > 0 && filteredAlerts.every(alert => selectedAlertIds.includes(alert.id));
+
+  const clearFilters = () => {
+    setSeverityFilter('all');
+    setTypeFilter('all');
+    setStatusFilter('all');
+    setZoneFilter('all');
+    setTimeWindow(7);
+    setEvidenceFilter('all');
+    setSortMode('newest');
+    setSearchQuery('');
+    setSelectedAlertIds([]);
+  };
+
+  const toggleSelectedAlert = (id: string) => {
+    setSelectedAlertIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAllFiltered = () => {
+    setSelectedAlertIds(allFilteredSelected ? [] : filteredAlerts.map(alert => alert.id));
+  };
+
+  const exportAlerts = (rows: AlertType[]) => {
+    const csvHeaders = 'ID,Type,Severity,Status,Zone,Area,Camera ID,Camera Name,Worker ID,Time,Confidence,Linked Incident,Evidence,Description';
+    const csvRows = rows.map(alert => [
+      alert.id,
+      alert.type,
+      alert.severity,
+      alert.status,
+      alert.zoneName || alert.zone,
+      alert.areaName || '',
+      alert.cameraId || '',
+      alert.cameraName || alert.camera,
+      alert.workerId || '',
+      alert.timestamp,
+      formatConfidence(alert.confidence),
+      alert.incidentId || '',
+      alertHasEvidence(alert) ? 'yes' : 'no',
+      alert.description,
+    ].map(csvEscape).join(',')).join('\n');
+    const csvContent = `${csvHeaders}\n${csvRows}`;
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = rows.length === selectedAlerts.length && selectedAlerts.length > 0 ? 'selected_alerts.csv' : 'filtered_alerts.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -558,23 +701,62 @@ const Alerts = ({
       )}
 
       <div className="px-6 pt-6 pb-4 bg-gradient-to-b from-[#050505] to-transparent">
-        <div className="flex justify-between items-center mb-4">
+        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-white">{t('alerts')}</h2>
-            <p className="text-sm text-zinc-500">{filteredAlerts.length} {t('alerts')} total</p>
+            <p className="text-sm text-zinc-500">{filteredAlerts.length} shown of {alerts.length} total alert signals</p>
           </div>
-          <div className="text-xs text-zinc-500 font-mono flex items-center space-x-2 rtl:space-x-reverse">
-            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
-            <span>{t('systemActive')}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="mr-2 flex items-center space-x-2 text-xs font-mono text-zinc-500 rtl:space-x-reverse">
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
+              <span>{t('systemActive')}</span>
+            </div>
+            <button
+              type="button"
+              onClick={fetchAlerts}
+              disabled={loading}
+              className={`inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 ${a11yClasses.focusRing}`}
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => exportAlerts(selectedAlerts.length > 0 ? selectedAlerts : filteredAlerts)}
+              disabled={filteredAlerts.length === 0}
+              className={`inline-flex items-center gap-2 rounded-lg border border-vs-orange/30 bg-vs-orange px-3 py-2 text-xs font-bold uppercase tracking-wide text-black transition-colors hover:bg-vs-lightOrange disabled:cursor-not-allowed disabled:opacity-50 ${a11yClasses.focusRing}`}
+            >
+              <Download size={14} />
+              Export {selectedAlerts.length > 0 ? selectedAlerts.length : 'view'}
+            </button>
           </div>
         </div>
 
-        <div className="flex gap-3 flex-wrap">
-          <div className="flex-1 min-w-0 sm:min-w-[240px] relative">
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-lg border border-zinc-800 bg-[#0f0f11] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Active signals</p>
+            <p className="mt-2 text-2xl font-bold text-white">{activeAlerts}</p>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-[#0f0f11] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Critical</p>
+            <p className={criticalAlerts > 0 ? 'mt-2 text-2xl font-bold text-red-400' : 'mt-2 text-2xl font-bold text-white'}>{criticalAlerts}</p>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-[#0f0f11] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Linked incidents</p>
+            <p className="mt-2 text-2xl font-bold text-white">{linkedIncidents}</p>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-[#0f0f11] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Evidence ready</p>
+            <p className="mt-2 text-2xl font-bold text-white">{alertsWithEvidence}</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <div className="relative min-w-0 flex-1 sm:min-w-[280px]">
             <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-zinc-600" aria-hidden="true" />
             <input
               type="text"
-              placeholder={t('search')}
+              placeholder="Search ID, type, zone, camera, worker, description"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className={`w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2 text-zinc-200 placeholder-zinc-600 text-sm ${a11yClasses.focusRing}`}
@@ -590,11 +772,47 @@ const Alerts = ({
             <Filter size={16} aria-hidden="true" />
             <span>{t('filters')}</span>
             <ChevronDown size={16} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`} aria-hidden="true" />
+            </button>
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as typeof sortMode)}
+            className={`rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 ${a11yClasses.focusRing}`}
+            aria-label="Sort alerts"
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="severity">Highest severity</option>
+            <option value="confidence">Highest confidence</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => setDensity(density === 'comfortable' ? 'compact' : 'comfortable')}
+            className={`inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-400 transition-colors hover:text-white ${a11yClasses.focusRing}`}
+            aria-label="Toggle alert list density"
+          >
+            <SlidersHorizontal size={16} />
+            {density === 'comfortable' ? 'Compact' : 'Comfort'}
           </button>
         </div>
 
         {showFilters && (
-          <div id="filter-panel" className="mt-3 p-4 bg-zinc-900 border border-zinc-800 rounded-lg flex gap-4 flex-wrap">
+          <div id="filter-panel" className="mt-3 grid grid-cols-1 gap-4 rounded-lg border border-zinc-800 bg-zinc-900 p-4 sm:grid-cols-2 xl:grid-cols-6">
+            <div>
+              <label htmlFor="time-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Time</label>
+              <select
+                id="time-filter"
+                value={String(timeWindow)}
+                onChange={(e) => setTimeWindow(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by alert time window"
+              >
+                <option value="7">Last 7 days</option>
+                <option value="14">Last 14 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="all">All time</option>
+              </select>
+            </div>
             <div className="flex-1 min-w-0 sm:min-w-[150px]">
               <label htmlFor="severity-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Severity</label>
               <select
@@ -625,13 +843,54 @@ const Alerts = ({
                 ))}
               </select>
             </div>
+            <div>
+              <label htmlFor="status-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Status</label>
+              <select
+                id="status-filter"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by status"
+              >
+                <option value="all">All</option>
+                {statusOptions.map(status => (
+                  <option key={status} value={status.toLowerCase()}>{status}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="zone-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Zone</label>
+              <select
+                id="zone-filter"
+                value={zoneFilter}
+                onChange={(e) => setZoneFilter(e.target.value)}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by zone"
+              >
+                <option value="all">All</option>
+                {zoneOptions.map(zone => (
+                  <option key={zone} value={zone.toLowerCase()}>{zone}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="evidence-filter" className="text-xs font-bold text-zinc-400 uppercase mb-2 block">Evidence</label>
+              <select
+                id="evidence-filter"
+                value={evidenceFilter}
+                onChange={(e) => setEvidenceFilter(e.target.value as typeof evidenceFilter)}
+                className={`w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-zinc-200 text-sm ${a11yClasses.focusRing}`}
+                aria-label="Filter by evidence availability"
+              >
+                <option value="all">All</option>
+                <option value="withEvidence">With evidence</option>
+                <option value="withoutEvidence">Missing evidence</option>
+                <option value="linkedIncident">Linked incident</option>
+              </select>
+            </div>
             <div className="flex items-end">
               <button
-                onClick={() => {
-                  setSeverityFilter('all');
-                  setTypeFilter('all');
-                  setSearchQuery('');
-                }}
+                onClick={clearFilters}
                 className={`px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs font-medium text-zinc-300 transition-colors ${a11yClasses.focusRing}`}
                 aria-label="Clear all filters"
               >
@@ -651,6 +910,41 @@ const Alerts = ({
           aria-atomic="false"
         >
           <div className="px-6 py-4 space-y-3">
+            {!loading && filteredAlerts.length > 0 && (
+              <div className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-[#0f0f11] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <label className="inline-flex items-center gap-3 text-xs font-medium text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    onChange={toggleSelectAllFiltered}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-vs-orange"
+                  />
+                  Select all {filteredAlerts.length} filtered alerts
+                </label>
+                <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
+                  <span>{selectedAlerts.length} selected</span>
+                  {selectedAlerts.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => exportAlerts(selectedAlerts)}
+                        className={`rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-bold uppercase tracking-wide text-zinc-300 hover:border-vs-orange/50 hover:text-vs-orange ${a11yClasses.focusRing}`}
+                      >
+                        Export selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAlertIds([])}
+                        className={`rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-bold uppercase tracking-wide text-zinc-300 hover:text-white ${a11yClasses.focusRing}`}
+                      >
+                        Clear selection
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {loading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="text-center">
@@ -659,15 +953,29 @@ const Alerts = ({
                 </div>
               </div>
             ) : filteredAlerts.length === 0 ? (
-              <div className="text-center py-12">
-                <AlertTriangle size={32} className="mx-auto mb-3 text-zinc-700" aria-hidden="true" />
-                <p className="text-zinc-500 text-sm">{t('noAlerts')}</p>
+              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-800 bg-zinc-950/30 px-6 text-center">
+                <AlertTriangle size={36} className="mb-4 text-zinc-700" aria-hidden="true" />
+                <p className="text-sm font-semibold text-zinc-300">{alerts.length === 0 ? 'No alert signals available yet' : 'No alerts match these controls'}</p>
+                <p className="mt-2 max-w-md text-xs leading-relaxed text-zinc-500">
+                  {alerts.length === 0
+                    ? 'When the edge AI pipeline detects hazards, alert records and evidence controls will appear here.'
+                    : 'Clear filters, expand the time window, or search a different camera, zone, worker, or hazard type.'}
+                </p>
+                {(alerts.length > 0 || searchQuery || severityFilter !== 'all' || typeFilter !== 'all' || statusFilter !== 'all' || zoneFilter !== 'all' || evidenceFilter !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className={`mt-5 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs font-bold uppercase tracking-wide text-vs-orange hover:bg-zinc-800 ${a11yClasses.focusRing}`}
+                  >
+                    Reset controls
+                  </button>
+                )}
               </div>
             ) : (
               filteredAlerts.map((alert) => (
                 <div
                   key={alert.id}
-                  className="bg-[#0f0f11] border border-zinc-800 rounded-lg p-4 hover:border-zinc-700 transition-colors cursor-pointer group"
+                  className={`bg-[#0f0f11] border border-zinc-800 rounded-lg ${density === 'compact' ? 'p-3' : 'p-4'} hover:border-zinc-700 transition-colors cursor-pointer group`}
                   onClick={() => setSelectedAlert(alert)}
                   role="button"
                   tabIndex={0}
@@ -681,7 +989,15 @@ const Alerts = ({
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3 rtl:space-x-reverse flex-1 min-w-0">
-                      <div className="w-12 h-12 rounded-lg bg-black overflow-hidden border border-zinc-800 flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedAlertIds.includes(alert.id)}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={() => toggleSelectedAlert(alert.id)}
+                        className="mt-3 h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-vs-orange"
+                        aria-label={`Select alert ${alert.id}`}
+                      />
+                      <div className={`${density === 'compact' ? 'h-10 w-10' : 'w-12 h-12'} rounded-lg bg-black overflow-hidden border border-zinc-800 flex-shrink-0`}>
                         {alert.thumbnail ? (
                           <img
                             src={alert.thumbnail}
@@ -696,30 +1012,52 @@ const Alerts = ({
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-white font-semibold group-hover:text-vs-orange transition-colors truncate">{alert.type}</span>
                           <StatusPill status={alert.status} />
+                          {alertHasEvidence(alert) && <span className="rounded border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-400">Evidence</span>}
                         </div>
                         <div className="mb-1 flex flex-wrap gap-1 text-[9px] font-mono uppercase tracking-wide text-zinc-500">
                           {alert.cameraId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Cam {alert.cameraId}</span>}
+                          {alert.cameraName && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">{alert.cameraName}</span>}
                           {alert.workerId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Worker {alert.workerId}</span>}
+                          {alert.trackId && <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5">Track {alert.trackId}</span>}
                         </div>
-                        <p className="text-xs text-zinc-500 mb-1">{formatLocationLine(alert)} • {alert.timestamp}</p>
-                        <p className="text-sm text-zinc-300 line-clamp-2">{alert.description}</p>
+                        <p className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                          <span className="inline-flex items-center gap-1"><MapPin size={12} />{formatLocationLine(alert)}</span>
+                          <span className="inline-flex items-center gap-1"><Clock3 size={12} />{formatShortDateTime(alert.timestamp)}</span>
+                          <span className="inline-flex items-center gap-1"><Camera size={12} />{alert.cameraName || alert.cameraId || alert.camera || 'Unknown camera'}</span>
+                        </p>
+                        {density === 'comfortable' && <p className="text-sm text-zinc-300 line-clamp-2">{alert.description}</p>}
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-2 flex-shrink-0">
                       <SeverityBadge severity={alert.severity} />
-	                      {alert.incidentId && (
-	                        <button
-	                          type="button"
-	                          onClick={(event) => {
-	                            event.stopPropagation();
-	                            onOpenIncident?.(alert.incidentId as string);
-	                          }}
-	                          className={`rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wide text-zinc-500 transition-colors hover:border-vs-orange/50 hover:text-vs-orange ${a11yClasses.focusRing}`}
-	                          aria-label={`Open linked incident ${alert.incidentId}`}
-	                        >
-	                          {alert.incidentId}
-	                        </button>
-	                      )}
+                      <span className="text-[10px] font-mono text-zinc-500">Conf {formatConfidence(alert.confidence)}</span>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedAlert(alert);
+                          }}
+                          className={`rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wide text-zinc-500 transition-colors hover:border-vs-orange/50 hover:text-vs-orange ${a11yClasses.focusRing}`}
+                          aria-label={`Open alert details ${alert.id}`}
+                        >
+                          Details
+                        </button>
+                        {alert.incidentId && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onOpenIncident?.(alert.incidentId as string);
+                            }}
+                            className={`inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wide text-zinc-500 transition-colors hover:border-vs-orange/50 hover:text-vs-orange ${a11yClasses.focusRing}`}
+                            aria-label={`Open linked incident ${alert.incidentId}`}
+                          >
+                            <Link2 size={10} />
+                            {alert.incidentId}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

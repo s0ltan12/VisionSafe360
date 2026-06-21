@@ -2,12 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   AlertTriangle, 
   Activity, 
+  BellRing,
   Camera, 
   MoreHorizontal,
   TrendingUp,
   TrendingDown,
   ShieldCheck,
-  Clock,
   Timer,
   ExternalLink
 } from 'lucide-react';
@@ -197,19 +197,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
           <h2 className="text-2xl font-bold text-white">{t('safetyOverview')}</h2>
           <p className="text-sm text-zinc-500">{t('realTimeMonitoring')}</p>
         </div>
-        <div className="flex shrink-0 space-x-2">
-           <span className="inline-flex items-center self-start rounded border border-zinc-800 bg-zinc-900 px-3 py-1 text-xs text-zinc-400">
-             <Clock size={12} className="me-2" aria-hidden="true" /> {t('lastUpdated')}: 10:45 AM
-           </span>
-        </div>
       </div>
 
-      <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <KPICard title={t('activeAlerts')} value={stats?.active_alerts?.toString() || '0'} icon={AlertTriangle} trend="up" trendValue="+2" colorBase="red" />
-        <KPICard title={t('incidents')} value={stats?.total_incidents?.toString() || '0'} icon={Activity} colorBase="orange" />
-        <KPICard title={t('resolvedAlerts')} value={stats?.resolved_alerts?.toString() || '0'} icon={ShieldCheck} trend="up" trendValue="+15%" colorBase="emerald" />
-        <KPICard title={t('camerasOnline')} value={`${stats?.online_cameras || 0}/${stats?.total_cameras || 0}`} icon={Camera} colorBase="blue" />
+      <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <KPICard title={t('activeAlerts')} value={stats?.active_alerts?.toString() || '0'} icon={AlertTriangle} colorBase="red" />
+        <KPICard title={t('allAlerts')} value={stats?.total_alerts?.toString() || '0'} icon={BellRing} colorBase="orange" />
+        <KPICard title={t('activeIncidents')} value={stats?.active_incidents?.toString() || '0'} icon={Activity} colorBase="purple" />
+        <KPICard title={t('resolvedAlerts')} value={stats?.resolved_alerts?.toString() || '0'} icon={ShieldCheck} colorBase="emerald" />
         <KPICard title={t('avgResolution')} value={formatDuration(stats?.avg_resolution_time_seconds)} icon={Timer} colorBase="purple" />
+        <KPICard title={t('camerasOnline')} value={`${stats?.online_cameras || 0}/${stats?.total_cameras || 0}`} icon={Camera} colorBase="blue" />
       </div>
 
       <div className="grid min-w-0 grid-cols-1 items-stretch gap-6 xl:grid-cols-3">
@@ -239,11 +235,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
         <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6 flex flex-col">
            <h3 className="font-bold text-base text-white mb-4">{t('topDangerousZones')}</h3>
            <div className="space-y-3">
-              {(dangerousZones.length ? dangerousZones : [
-                { zone: t('zoneA'), incident_count: 0, risk_score: 0 },
-                { zone: t('zoneB'), incident_count: 0, risk_score: 0 },
-                { zone: t('zoneC'), incident_count: 0, risk_score: 0 },
-              ]).map((zone: any, i: number) => (
+              {dangerousZones.length === 0 ? (
+                <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-4 text-sm text-zinc-500">
+                  No zone risk data yet.
+                </div>
+              ) : dangerousZones.map((zone: any, i: number) => (
                 <div 
                   key={i} 
                   className="flex min-w-0 items-center space-x-3 rtl:space-x-reverse p-3 bg-zinc-900/50 rounded border border-zinc-800 hover:border-vs-orange/30 transition-colors group cursor-pointer"
@@ -286,7 +282,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
         <div className="min-w-0 bg-[#0f0f11] rounded-lg border border-zinc-800 p-4 sm:p-6">
           <h3 className="font-bold text-base text-white mb-4">{t('recurringHazards')}</h3>
           <div className="space-y-3">
-            {(recurringHazards.length ? recurringHazards : [{ zone: t('noRecurringHazards'), classification: t('clear'), count: 0 }]).map((hazard: any, index: number) => (
+            {recurringHazards.length === 0 ? (
+              <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-4 text-sm text-zinc-500">
+                No recurring hazard data yet.
+              </div>
+            ) : recurringHazards.map((hazard: any, index: number) => (
               <div key={`${hazard.zone}-${hazard.classification}-${index}`} className="flex items-center justify-between gap-3 rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-zinc-200">{hazard.classification}</p>
@@ -335,7 +335,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewAlerts }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/50">
-              {alerts.map((alert) => (
+              {alerts.length === 0 ? (
+                <tr role="row">
+                  <td className="px-6 py-6 text-center text-sm text-zinc-500" colSpan={6} role="cell">
+                    No recent activity.
+                  </td>
+                </tr>
+              ) : alerts.map((alert) => (
                 <tr key={alert.id} className="hover:bg-zinc-900/40 transition-colors group" role="row">
                   <td className="px-6 py-3" role="cell"><SeverityBadge severity={alert.severity} /></td>
                   <td className="px-6 py-3" role="cell">

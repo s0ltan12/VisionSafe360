@@ -30,6 +30,7 @@ from .api.routes.safety_zones import router as safety_zones_router
 from .api.routes.users import router as users_router
 from .api.websocket.ws_handler import router as incidents_ws_router
 from .api.websocket.ws_notifications import router as notifications_ws_router
+from .api.websocket.ws_realtime import router as realtime_ws_router
 from .api.websocket.ws_stream import router as stream_ws_router
 from .config.database import Base, engine
 from .config.settings import settings
@@ -159,6 +160,7 @@ def _register_routes() -> None:
     app.include_router(health_router)
     app.include_router(incidents_ws_router)
     app.include_router(notifications_ws_router)
+    app.include_router(realtime_ws_router)
     app.include_router(stream_ws_router)
 
 
